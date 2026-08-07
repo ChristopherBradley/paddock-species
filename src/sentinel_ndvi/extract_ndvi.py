@@ -1,19 +1,32 @@
 #!/usr/bin/env python3
 """
-Stage 2 (gadi/DEA): extract Sentinel-2 NDVI + canola-flowering (NDYI) time series
-for each candidate NVT trial, to confirm the surrounding paddock actually grew the
-trial crop.
+Stage 2 (gadi/DEA): extract a Sentinel-2 index time series for each candidate NVT trial,
+to confirm the surrounding paddock actually grew the trial crop.
 
 Runs on NCI gadi inside the DEA module environment:
     module use /g/data/v10/public/modules/modulefiles
     module load dea/20231204
     python3 extract_ndvi.py --chunk <chunk.csv> --outdir <dir> [--window-m 200]
 
-Input chunk CSV columns (subset of data/derived/nvt_trials_labeled.csv):
+Input chunk CSV columns (subset of derived/nvt_trials_labeled.csv):
     TrialCode, Year, crop, lat, lon, sow, harv
-Output: one long-form CSV per chunk in <outdir>, columns:
-    TrialCode, crop, time, n_clear_px, n_px_total, ndvi_win_mean, ndvi_win_std,
-    ndvi_corner, ndyi_win_mean, ndyi_corner
+
+Output: one long-form CSV per chunk in <outdir>, one row per trial per clear date:
+    TrialCode, crop, sow, time,
+    n_clear_px, n_px_total, n_px_window, n_tree_masked_px,
+    ndvi_win_mean, ndvi_win_std, ndvi_corner,
+    ndyi_win_mean, ndyi_corner,            # legacy, superseded by CFI
+    cfi_win_mean, cfi_corner,              # Canola Flower Index — the discriminator
+    red/green/blue/nir_win_mean            # raw bands, so new indices need no re-extraction
+
+TREE MASKING (on by default, --chm-dir '' to disable). The 200 m window is centred on a
+paddock CORNER, so it routinely catches tree lines, paddock trees and roadside vegetation.
+Those pixels are green year-round and never flower, diluting the flowering signal. Any 10 m
+pixel overlapping a >1 m canopy pixel (Global Canopy Height v2, 1 m) is dropped, along with
+one ring of neighbours to absorb geolocation offset between the two products.
+`n_px_total` is the count of USABLE (non-tree) pixels, so the downstream clear-fraction
+filter compares like with like; `n_px_window` and `n_tree_masked_px` record what was removed.
+
 `n_clear_px / n_px_total` is the clear fraction; partially-cloudy scenes are kept here
 and filtered downstream in phenology_check.py (see --min-clear-frac).
 Failures are recorded (status=FAILED) — never fabricated.
@@ -28,6 +41,7 @@ import traceback
 
 import numpy as np
 import pandas as pd
+import xarray as xr
 
 # DEA Sentinel-2 Analysis Ready Data (surface reflectance), all three platforms
 PRODUCTS = ["ga_s2am_ard_3", "ga_s2bm_ard_3", "ga_s2cm_ard_3"]
@@ -99,7 +113,7 @@ def load_trial(dc, lat, lon, t0, t1, window_m):
     return ds
 
 
-def compute_indices(ds):
+def compute_indices(ds, tree_mask=None):
     """Return per-pixel index/band DataArrays (cloud-masked) plus the clear-pixel count.
 
     Reflectance is rescaled to 0-1. NDVI/NDYI are ratios so the scale cancels, but CFI is
@@ -107,8 +121,17 @@ def compute_indices(ds):
     PaddockTS applies the formula to raw DN; multiply CFI by REFL_SCALE to compare against
     values from that code. Separability and threshold *ranking* are unaffected either way,
     since the two differ by a constant factor.
+
+    `tree_mask` (True = drop) is folded into the clear mask, so trees are excluded from
+    every statistic AND from the clear-pixel count. That matters: if trees were dropped
+    from the numerator only, a heavily-treed window would look permanently cloudy and be
+    discarded downstream by the clear-fraction filter.
     """
     clear = ds["oa_fmask"] == FMASK_CLEAR
+    if tree_mask is not None:
+        keep = xr.DataArray(~tree_mask, dims=("y", "x"),
+                            coords={"y": ds["y"], "x": ds["x"]})
+        clear = clear & keep
     b = {}
     for name in ("nbart_blue", "nbart_green", "nbart_red", "nbart_nir_1"):
         arr = ds[name].where((ds[name] != NODATA) & clear)
@@ -127,14 +150,21 @@ def compute_indices(ds):
             "red": red, "green": green, "blue": blue, "nir": nir}, n_clear
 
 
-def trial_timeseries(dc, row, window_m):
+def trial_timeseries(dc, row, window_m, masker=None):
     lat, lon = float(row["lat"]), float(row["lon"])
     t0 = (pd.to_datetime(row["sow"]) - pd.Timedelta(days=30)).strftime("%Y-%m-%d")
     t1 = (pd.to_datetime(row["harv"]) + pd.Timedelta(days=30)).strftime("%Y-%m-%d")
     ds = load_trial(dc, lat, lon, t0, t1, window_m)
     if ds.sizes.get("time", 0) == 0:
         return pd.DataFrame()
-    idx, n_clear = compute_indices(ds)
+    n_window = int(ds.sizes["x"] * ds.sizes["y"])
+    tree_mask, n_masked = None, 0
+    if masker is not None:
+        tree_mask, _st = masker.mask_for_geobox(ds.geobox, lon, lat)
+        n_masked = int(tree_mask.sum())
+        if n_masked >= n_window:          # window is entirely tree — nothing to measure
+            return pd.DataFrame()
+    idx, n_clear = compute_indices(ds, tree_mask)
     cx, cy = _transformer().transform(lon, lat)
     cols = {
         "TrialCode": row["TrialCode"],
@@ -145,7 +175,12 @@ def trial_timeseries(dc, row, window_m):
         "sow": pd.to_datetime(row["sow"]).date().isoformat(),
         "time": pd.to_datetime(idx["ndvi"]["time"].values),
         "n_clear_px": n_clear.values.astype(int),
-        "n_px_total": int(ds.sizes["x"] * ds.sizes["y"]),
+        # n_px_total is the count of USABLE (non-tree) pixels, so the downstream
+        # clear-fraction filter compares like with like. Full window size and the number of
+        # tree-masked pixels are kept separately for transparency.
+        "n_px_total": n_window - n_masked,
+        "n_px_window": n_window,
+        "n_tree_masked_px": n_masked,
     }
     for name in ("ndvi", "ndyi", "cfi"):
         cols[f"{name}_win_mean"] = idx[name].mean(dim=("x", "y")).values
@@ -173,6 +208,13 @@ def main():
                     help="abort the job after this many timeouts in a row — the index DB "
                          "is down or its connection pool is exhausted, so continuing just "
                          "burns walltime and hammers a shared service")
+    ap.add_argument("--chm-dir", default="/scratch/xe2/cb8590/Global_Canopy_Height_v2",
+                    help="1 m Global Canopy Height v2 quadkey tiles; '' disables tree masking")
+    ap.add_argument("--tree-height-min", type=float, default=1.0,
+                    help="canopy height (m) above which a 1 m pixel counts as tree")
+    ap.add_argument("--tree-dilate", type=int, default=1,
+                    help="also drop N rings of pixels around each tree pixel, to absorb "
+                         "geolocation offset between the canopy product and Sentinel-2")
     ap.add_argument("--stall-timeout", type=int, default=900,
                     help="force-exit if no trial completes in this many seconds (hard "
                          "backstop for hangs inside native code, which SIGALRM cannot "
@@ -199,6 +241,13 @@ def main():
         sys.exit(75)
     finally:
         signal.alarm(0)
+
+    masker = None
+    if args.chm_dir:
+        from tree_mask import TreeMasker
+        masker = TreeMasker(args.chm_dir, args.tree_height_min, args.tree_dilate)
+        print(f"tree masking ON: >{args.tree_height_min} m, +{args.tree_dilate} px, "
+              f"{len(masker._have)} tiles", flush=True)
 
     trials = pd.read_csv(args.chunk)
     os.makedirs(args.outdir, exist_ok=True)
@@ -241,7 +290,7 @@ def main():
         try:
             signal.alarm(args.trial_timeout)      # watchdog: never block forever
             try:
-                df = trial_timeseries(dc, row, args.window_m)
+                df = trial_timeseries(dc, row, args.window_m, masker)
             finally:
                 signal.alarm(0)
             if df.empty:
