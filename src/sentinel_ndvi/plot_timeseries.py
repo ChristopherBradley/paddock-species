@@ -32,7 +32,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
 
 CROP_COLOUR = {"Canola": "#E69F00", "Wheat": "#0072B2"}   # colourblind-safe pair
-GRID = np.arange(0, 245, 5)                                # common DAS axis
+GRID = np.arange(0, 245, 5)      # default DAS axis; replaced when --align doy
 
 
 def load(ts_dir, min_clear_frac):
@@ -62,13 +62,13 @@ def pick(ts, n_per_crop, seed, min_obs):
     return out
 
 
-def resample(g, col):
-    """Interpolate one trial onto the common DAS grid (no extrapolation)."""
-    g = g.sort_values("das").dropna(subset=[col])
+def resample(g, col, grid):
+    """Interpolate one trial onto the common grid (no extrapolation)."""
+    g = g.sort_values("axis").dropna(subset=[col])
     if len(g) < 3:
-        return np.full(GRID.shape, np.nan)
-    v = np.interp(GRID, g["das"], g[col], left=np.nan, right=np.nan)
-    v[(GRID < g["das"].min()) | (GRID > g["das"].max())] = np.nan
+        return np.full(grid.shape, np.nan)
+    v = np.interp(grid, g["axis"], g[col], left=np.nan, right=np.nan)
+    v[(grid < g["axis"].min()) | (grid > g["axis"].max())] = np.nan
     return v
 
 
@@ -80,11 +80,36 @@ def main():
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--min-obs", type=int, default=30)
     ap.add_argument("--min-clear-frac", type=float, default=0.5)
-    ap.add_argument("--flower", type=int, nargs=2, default=(70, 140),
-                    help="candidate flowering window, days after sowing")
+    ap.add_argument("--flower", type=int, nargs=2, default=(120, 190),
+                    help="flowering window, days after sowing")
+    # Options for reproducing the PaddockTS-style figure: one region, one season, calendar
+    # x-axis, rows ordered by similarity. Measured flowering spread is IQR 26 d on calendar
+    # day-of-year vs 30 d on days-after-sowing, so pooling seasons/regions smears any band
+    # regardless of aggregation — worth separating that effect from the paddock-vs-window one.
+    ap.add_argument("--align", choices=("das", "doy"), default="das",
+                    help="x-axis: days after sowing, or calendar day-of-year")
+    ap.add_argument("--year", type=int, help="restrict to one sow year")
+    ap.add_argument("--state", help="restrict to one state")
+    ap.add_argument("--cluster", action="store_true",
+                    help="order heatmap rows by hierarchical clustering, not by crop")
+    ap.add_argument("--labeled", help="labelled CSV, needed for --state")
     args = ap.parse_args()
 
     ts = load(args.ts_dir, args.min_clear_frac)
+    ts["axis"] = ts["das"] if args.align == "das" else ts["time"].dt.dayofyear
+    if args.year:
+        ts = ts[ts["sow"].dt.year == args.year]
+    if args.state:
+        if not args.labeled:
+            raise SystemExit("--state needs --labeled")
+        lab = pd.read_csv(args.labeled)[["TrialCode", "state"]].drop_duplicates("TrialCode")
+        ts = ts.merge(lab, on="TrialCode", how="left")
+        ts = ts[ts["state"] == args.state]
+    if ts.empty:
+        raise SystemExit("no trials left after --year/--state filters")
+    global GRID
+    if args.align == "doy":
+        GRID = np.arange(int(ts["axis"].min()), int(ts["axis"].max()) + 5, 5)
     chosen = pick(ts, args.n_per_crop, args.seed, args.min_obs)
     os.makedirs(args.outdir, exist_ok=True)
 
@@ -96,10 +121,20 @@ def main():
             mapping.append({"label": lab, "crop": crop, "TrialCode": tc})
             g = ts[ts["TrialCode"] == tc]
             for col in mats:
-                mats[col].append(resample(g, col))
+                mats[col].append(resample(g, col, GRID))
+
+    if args.cluster:
+        from scipy.cluster.hierarchy import leaves_list, linkage
+        M = np.vstack(mats["cfi_win_mean"])
+        Mf = np.nan_to_num(M, nan=float(np.nanmean(M)))
+        order = leaves_list(linkage(Mf, method="average"))
+        labels = [labels[i] for i in order]
+        for col in mats:
+            mats[col] = [mats[col][i] for i in order]
 
     fig, axes = plt.subplots(2, 2, figsize=(15, 10),
                              gridspec_kw={"height_ratios": [1, 1.25]})
+    XLABEL = "days after sowing" if args.align == "das" else "calendar day-of-year"
     titles = {"cfi_win_mean": "CFI  (Canola Flower Index)",
               "ndvi_win_mean": "NDVI  (greenness)"}
 
@@ -111,9 +146,10 @@ def main():
             sel = [r for (l, c), r in zip(labels, mats[col]) if c == crop]
             ax.plot(GRID, np.nanmean(np.vstack(sel), axis=0),
                     color=CROP_COLOUR[crop], lw=3.2, label=f"{crop} mean")
-        ax.axvspan(*args.flower, color="grey", alpha=0.13, zorder=0)
+        if args.align == "das":
+            ax.axvspan(*args.flower, color="grey", alpha=0.13, zorder=0)
         ax.set_title(titles[col], fontsize=12, weight="bold")
-        ax.set_xlabel("days after sowing")
+        ax.set_xlabel(XLABEL)
         ax.set_ylabel(titles[col].split()[0])
         ax.grid(alpha=0.25)
         ax.legend(loc="upper left", fontsize=9)
@@ -128,10 +164,12 @@ def main():
         ax.set_yticklabels([l for l, _ in labels], fontsize=8)
         for tick, (_, crop) in zip(ax.get_yticklabels(), labels):
             tick.set_color(CROP_COLOUR[crop])
-        ax.axhline(args.n_per_crop - 0.5, color="black", lw=2)
-        for x in args.flower:
-            ax.axvline(x, color="black", ls="--", lw=1.1, alpha=0.8)
-        ax.set_xlabel("days after sowing")
+        if not args.cluster:
+            ax.axhline(args.n_per_crop - 0.5, color="black", lw=2)
+        if args.align == "das":
+            for x in args.flower:
+                ax.axvline(x, color="black", ls="--", lw=1.1, alpha=0.8)
+        ax.set_xlabel(XLABEL)
         ax.set_title(f"{titles[col]} — per trial", fontsize=11)
         fig.colorbar(im, ax=ax, fraction=0.03, pad=0.02)
 
@@ -142,10 +180,12 @@ def main():
         fontsize=13, weight="bold")
     fig.tight_layout(rect=[0, 0, 1, 0.94])
 
-    png = os.path.join(args.outdir, "cfi_ndvi_timeseries_SENSITIVE.png")
+    tag = f"_{args.align}" + (f"_{args.year}" if args.year else "") + \
+          (f"_{args.state}" if args.state else "") + ("_clustered" if args.cluster else "")
+    png = os.path.join(args.outdir, f"cfi_ndvi_timeseries{tag}_SENSITIVE.png")
     fig.savefig(png, dpi=150)
     pd.DataFrame(mapping).to_csv(
-        os.path.join(args.outdir, "cfi_ndvi_timeseries_trial_map_SENSITIVE.csv"), index=False)
+        os.path.join(args.outdir, f"cfi_ndvi_timeseries{tag}_trial_map_SENSITIVE.csv"), index=False)
     print(f"wrote {png}")
 
     # Numbers behind the picture, so the visual impression can be checked against a stat.
