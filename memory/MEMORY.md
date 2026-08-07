@@ -16,6 +16,48 @@
       Held-out J = **0.535** (selected on sow years <2021, applied to 2021+).
       All thresholds are CLI flags — rerun `phenology_check.py` to change them.
 
+## Stage-2 flowering-timing findings (2026-08-07) — `flowering_timing.md`
+Measured on 821 canola trials with a real CFI peak:
+- **Calendar day-of-year aligns flowering tighter than days-after-sowing** (IQR 26 d vs
+  30 d). Median peak **DOY 251 (~8 Sep)**. The DAS axis used so far is the weaker one.
+- **Timing is only partly predictable**: lat r=-0.36, lon r=+0.22, year r=-0.16. State
+  medians 242 (WA) → 258 (VIC), but within-state IQR is 20-31 d. Location narrows the
+  window, it does not pin it. **Weather-based prediction is not worth it yet** — a fixed
+  generous window plus a cloud-gap filter captures most of the benefit.
+- **Cloud hides the peak**: 17 % of canola trials have a >21 d clear gap inside 100-200 DAS,
+  11 % have >28 d, against a flowering event lasting only 2-4 weeks. So for ~1 in 6 trials
+  "no flowering detected" is unfalsifiable. **Filter on observability before believing a
+  negative.**
+
+## Why the colleague's PaddockTS heatmap looked so much sharper (2026-08-07)
+Diagnosed, not guessed. Two independent causes, in order of size:
+1. **Pooling seasons and regions.** Restricting to one year + one state + calendar axis +
+   hierarchical clustering reproduces the signature: canola CFI peaks sharply at DOY ~255
+   (0.18) vs wheat flat ~0.10, and clustering separates 9/10 wheat from 10/10 canola. That
+   alone recovers most of the contrast. (`plot_timeseries.py --align doy --year --state
+   --cluster`.)
+2. **200 m window mean at a paddock CORNER vs paddock median.** Still un-tested, and the
+   remaining gap. The trial GPS marks a corner, so much of the window is neighbouring
+   paddocks, roads and trees. PaddockTS segments paddocks (`02_SAMGeo_paddocks.py`,
+   `03_paddock-ts.py`) and takes the median — reuse that rather than Fields of The World,
+   whose *benchmark* excludes Australia (only the model-predicted global product covers it,
+   2024/25 only).
+NOT a cause: colour scaling. Their 300-2300 raw-DN range is 0.03-0.23 in our 0-1 units,
+i.e. the same range we plot.
+Bonus: trial **W08** (wheat-labelled) clusters with the canola block and shares their CFI
+shape — a concrete label-mismatch candidate of exactly the kind Stage 2 exists to find.
+
+## Infrastructure notes (2026-08-07)
+- **gadi LOGIN nodes have direct outbound internet** (OpenAlex, HuggingFace, source.coop all
+  200, no proxy). COMPUTE nodes do not — that asymmetry is what caused the PROJ hang. So
+  literature search and dataset downloads can be done from a login node; keep bulk transfers
+  on `gadi-dm`.
+- Repo is now a **git repo** (first commit 2026-08-07). `.gitignore` hardened with a
+  `**/*SENSITIVE*` catch-all plus per-trial output patterns.
+- **derived/ moved `/g/data` → `/scratch/xe2/cb8590/paddock-species-data/derived`**; raw stays
+  on `/g/data`. Scratch is purged after ~100 days — `./sync/sync_to_gadi.sh pull` anything
+  worth keeping.
+
 ## Stage-2 finding (2026-08-07): CFI replaced NDYI, on the user's instruction
 User directed: use **max CFI in the flowering period** (`CFI = NDVI * ((Red+Green) +
 (Green-Blue))`, Tian et al. 2022; per `PaddockTS/Code/indices_etc/indices.py`). This was the
