@@ -1,0 +1,51 @@
+# ============================================================
+# SENSITIVE — GRDC/NVT trial data under signed NDA. NEVER commit.
+# (see CLAUDE.md "Sensitive Data" + memory grdc-data-legal-sensitivity)
+# ============================================================
+data/
+2017-2024 NVT Yield and Grain Quality*.xlsx
+**/nvt_trials_labeled.csv
+**/*site*level*.csv
+**/*_coords*.csv
+
+# Catch-all: anything explicitly named SENSITIVE can never be committed by accident.
+# Stage-2 writes figures/maps with this marker in the filename.
+**/*SENSITIVE*
+
+# Stage-2 per-trial outputs. These live on /scratch, not in the repo, but a stray `pull`
+# into the wrong directory must not become a commit. All carry TrialCode = site-level records.
+**/nvt_confirmed.csv
+**/sentinel_ts/
+**/chunks/chunk_*.csv
+**/*_ts.csv
+**/*_status.csv
+
+# ---- Large comparison datasets (belong on /g/data, not git) ----
+NLUM_v7_250_AgProbabilitySurfaces_2020_21_geo_package_20241128/
+*.tif
+*.gpkg
+
+# ---- Local reading material (not for the repo) ----
+Papers/
+extra papers/
+
+# ---- Any figure that plots site coordinates ----
+output/figures/*_map_*.png
+data/derived/
+
+# ---- PBS job logs (belt-and-braces; -o/-e already point at /scratch) ----
+*.o[0-9]*
+*.e[0-9]*
+
+# ---- Machine-local settings (paths differ per machine; not shared state) ----
+.claude/settings.local.json
+
+# ---- Python / OS cruft ----
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+.ipynb_checkpoints/
+.env
+.venv/
+venv/

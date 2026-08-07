@@ -1,0 +1,31 @@
+# NORA default project config for paddock-species
+topic: "Map cropland/paddock crop species across Australia using Sentinel-2 (and possibly Sentinel-1) imagery, using GRDC trial-site records as ground-truth labels, adapting a WorldCereal-style methodology to local Australian data. Canola (via the Canola Flower Index) is the likely starting species."
+journal: "Remote Sensing of Environment (RSE)"
+
+domain:
+  - remote_sensing
+
+geographic_scope: "Australia (national, wherever GRDC trial sites are located)"
+
+datasets:
+  - GRDC trial site dataset (sensitive, NDA-covered, local only)
+  - Sentinel-2 (primary)
+  - Sentinel-1 (optional, pending literature support)
+  - Australia NLUM 250m crop species data (in repo)
+  - WorldCereal (comparison + methodology reference)
+  - Fields of the World (paddock boundaries)
+  - CSIRO ePaddocks (paddock boundaries)
+  - DEA datacube via NCI gadi
+
+compute:
+  local_gpu: none
+  remote: nci_gadi
+  nci_projects: [v10, ka08]
+  nci_allocation_ksu_per_quarter: 200
+  nci_budget_ksu_this_project: 10
+  gee: free_researcher_tier
+
+timeline: "exploratory, no fixed deadline"
+
+research_type: "improvement_on_existing_method"
+reference_paper: "none (WorldCereal methodology + PaddockTS indices.py as working references)"

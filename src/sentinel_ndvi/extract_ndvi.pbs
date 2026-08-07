@@ -1,0 +1,52 @@
+#!/bin/bash
+#PBS -N s2_extract
+#PBS -P xe2
+#PBS -q normal
+#PBS -l ncpus=1
+#PBS -l mem=4GB
+#PBS -l jobfs=2GB
+#PBS -l walltime=04:00:00
+#PBS -l storage=gdata/xe2+gdata/v10+gdata/ka08+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+
+# One PBS job = one chunk of trials. Submit via extract_ndvi.sh (qsub -v CHUNK=...).
+# Small-job design (1 CPU / 4GB / long walltime) per the SU-minimisation note in CLAUDE.md.
+# Benchmarked 2026-08-06 on a 3-trial smoke test: peak RSS 240 MB, ~33 s/trial wall,
+# 25% CPU (I/O bound on /g/data reads). Each trial loads only a ~20x20 px window, so
+# memory stays flat regardless of chunk size or year. 4GB keeps the normal-queue charge
+# at 1 CPU-equivalent; 16GB would have billed 4x for headroom nothing uses.
+# ~33 s/trial => ~55 min per 100-trial chunk for 2017; later years have denser S2
+# revisit (S2A+S2B+S2C), so walltime stays at 4 h for margin (unused walltime is free).
+
+set -euo pipefail
+echo "Starting extract_ndvi.pbs for CHUNK=${CHUNK:?set -v CHUNK=/path/to/chunk_xxx.csv}"
+
+CODE=/home/147/cb8590/Projects/paddock-species/src/sentinel_ndvi
+OUTDIR=/scratch/xe2/cb8590/paddock-species-data/derived/sentinel_ts
+
+module use /g/data/v10/public/modules/modulefiles
+module load dea/20231204
+
+# ---------------------------------------------------------------------------
+# MUST come after `module load dea` — that module exports PROJ_NETWORK=ON.
+# Gadi compute nodes have NO outbound internet. With PROJ_NETWORK=ON, PROJ tries to
+# fetch datum-transformation grids from cdn.proj.org (AWS CloudFront, 108.158.20.x) and
+# blocks/retries forever: jobs sat at ~0% CPU until the 4 h walltime killed them.
+# Whether a given trial hangs depends on its LOCATION (some need a grid, some don't),
+# which is why the failure looked random and load-related when it was neither.
+# Verified 2026-08-07 by strace: connect(...:443) -> ENETUNREACH in a retry loop.
+# Accuracy cost is negligible here: without the grid, WGS84->GDA94 falls back to a
+# built-in transform (~1.8 m error from plate motion) — well under one 10 m pixel, on a
+# 200 m window that is averaged anyway.
+export PROJ_NETWORK=OFF
+# Belt-and-braces: if anything else still reaches for the network, fail fast, never hang.
+export GDAL_HTTP_TIMEOUT=10
+export GDAL_HTTP_CONNECTTIMEOUT=5
+export GDAL_HTTP_MAX_RETRY=1
+export CPL_VSIL_CURL_USE_HEAD=NO
+
+cd "$CODE"
+python3 extract_ndvi.py --chunk "$CHUNK" --outdir "$OUTDIR" --window-m 200
+echo "Done ${CHUNK}"
