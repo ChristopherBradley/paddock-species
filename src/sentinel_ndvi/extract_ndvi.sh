@@ -67,13 +67,17 @@ for f in "${chunks[@]}"; do
     # killed mid-run leaves a short file — resubmitting it resumes from where it stopped.
     if [ "$FORCE" -eq 0 ] && [ -f "$status" ]; then
         want=$(( $(wc -l < "$f") - 1 ))
-        have=$(( $(wc -l < "$status") - 1 ))
+        # Count only OK/EMPTY, matching what extract_ndvi.py treats as done. Counting ALL
+        # status rows would let a chunk of 97 OK + 3 FAILED read as 100/100 complete, so the
+        # failures would never be resubmitted — the shell would call the chunk finished while
+        # the Python resume logic was still willing to retry them.
+        have=$(tail -n +2 "$status" | grep -cE ',(OK|EMPTY),' || true)
         if [ "$have" -ge "$want" ]; then
-            echo "skip $name ($have/$want trials already extracted)"
+            echo "skip $name ($have/$want trials succeeded)"
             n_skip=$((n_skip + 1))
             continue
         fi
-        echo "resubmit $name (incomplete: $have/$want trials)"
+        echo "resubmit $name ($have/$want succeeded — retrying the rest)"
     fi
     lane=$(( n_sub % LANES ))
     prev=${lane_tail[$lane]:-}
