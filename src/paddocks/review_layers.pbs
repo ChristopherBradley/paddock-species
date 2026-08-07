@@ -1,0 +1,31 @@
+#!/bin/bash
+#PBS -N review_layers
+#PBS -P xe2
+#PBS -q normal
+#PBS -l ncpus=1
+#PBS -l mem=8GB
+#PBS -l walltime=03:00:00
+#PBS -l storage=gdata/xe2+gdata/v10+gdata/ka08+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+
+# Build QGIS review layers + the ranked annotation spreadsheet for every trial.
+# Geometry work plus one 1 m canopy-tile read per polygon — I/O bound, single CPU is right.
+# 8 GB rather than 4: this holds every AOI's polygons plus CHM windows, and the 4 GB limit
+# already OOM-killed a pre-segment job on this run.
+
+set -euo pipefail
+: "${SITES:?set -v SITES=}"
+: "${POLYDIR:?set -v POLYDIR=}"
+: "${OUTDIR:?set -v OUTDIR=}"
+CHM=${CHM:-/scratch/xe2/cb8590/Global_Canopy_Height_v2}
+
+export PROJ_NETWORK=OFF
+export DATACUBE_CONFIG_PATH=/g/data/v10/public/modules/dea/20231204/datacube.conf
+PY=/g/data/xe2/John/geospatenv/bin/python
+
+cd /home/147/cb8590/Projects/paddock-species/src/paddocks
+$PY make_review_layers.py --sites "$SITES" --polydir "$POLYDIR" --outdir "$OUTDIR" \
+    --chm-dir "$CHM"
+echo "Done review_layers"

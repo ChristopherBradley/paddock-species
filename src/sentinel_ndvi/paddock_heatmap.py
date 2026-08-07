@@ -138,8 +138,11 @@ def main():
     fig.colorbar(im, cax=axc, label="CFI (raw-DN scale, x10000)")
 
     os.makedirs(args.outdir, exist_ok=True)
+    # The metric belongs in the filename: without it, comparing two estimators over the same
+    # year/state silently overwrites the first figure with the second.
     tag = f"{args.year}" + (f"_{args.state}" if args.state else "") + \
-          (f"_{args.region.replace(' ', '')}" if args.region else "")
+          (f"_{args.region.replace(' ', '')}" if args.region else "") + \
+          ("" if args.metric == "cfi_win_mean" else f"_{args.metric}")
     png = os.path.join(args.outdir, f"paddock_heatmap_{tag}_SENSITIVE.png")
     fig.savefig(png, dpi=150, bbox_inches="tight")   # GridSpec handles layout
     pd.DataFrame([{"row": int(np.where(order == i)[0][0]), "TrialCode": labels[i][0],

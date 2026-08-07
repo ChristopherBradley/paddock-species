@@ -1,0 +1,46 @@
+#!/bin/bash
+#PBS -N sam_segment
+#PBS -P xe2
+#PBS -q gpuvolta
+#PBS -l ncpus=12
+#PBS -l ngpus=1
+#PBS -l mem=90GB
+#PBS -l jobfs=50GB
+#PBS -l walltime=02:00:00
+#PBS -l storage=gdata/xe2+gdata/v10+gdata/ka08+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+
+# Stage 2: SAM over MANY pre-built composites behind a SINGLE model load.
+# `gpuvolta` bundles 12 CPUs with every GPU and bills all of them (36 SU/hr), so this is the
+# smallest bookable GPU unit — trimming ncpus or mem saves nothing. What DOES save money is
+# putting many AOIs in one job: the ~49 s model load is then paid once instead of per AOI.
+#
+# The script picks its device from torch.cuda.is_available(), so submitting this same file
+# with `-q normal -l ncpus=N -l mem=XGB` (and no ngpus) runs SAM on CPU — that is how the
+# GPU-vs-CPU arm of the benchmark is run. No internet needed: the checkpoint is on /g/data.
+
+set -euo pipefail
+: "${AOIS:?set -v AOIS=}"
+OUTDIR=${OUTDIR:-/scratch/xe2/cb8590/paddock-species-data/derived/samgeo}
+
+export PROJ_NETWORK=OFF
+export DATACUBE_CONFIG_PATH=/g/data/v10/public/modules/dea/20231204/datacube.conf
+PY=/g/data/xe2/John/geospatenv/bin/python
+
+cd /home/147/cb8590/Projects/paddock-species/src/paddocks
+# SEED_FROM lets a stage-2 job reuse composites built by a stage-1 job in another directory
+# while keeping its own outputs separate — which is what makes A/B timing possible without
+# rebuilding the composites for every configuration under test.
+if [ -n "${SEED_FROM:-}" ]; then
+    mkdir -p "$OUTDIR"
+    ln -sf "$SEED_FROM"/*.tif "$OUTDIR"/ 2>/dev/null || true
+    # Segment masks are outputs, not inputs — a symlinked one would be mistaken for done.
+    rm -f "$OUTDIR"/*_segment.tif
+    echo "seeded $(ls "$OUTDIR"/*.tif 2>/dev/null | wc -l) composites from $SEED_FROM"
+fi
+echo "sam_segment AOIS=$AOIS OUTDIR=$OUTDIR ncpus=${PBS_NCPUS:-?}"
+nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null || echo "no GPU"
+$PY samgeo_segment.py segment --aois "$AOIS" --outdir "$OUTDIR"
+echo "Done sam_segment"

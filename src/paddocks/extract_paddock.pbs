@@ -1,0 +1,33 @@
+#!/bin/bash
+#PBS -N extract_paddock
+#PBS -P xe2
+#PBS -q normal
+#PBS -l ncpus=1
+#PBS -l mem=4GB
+#PBS -l walltime=04:00:00
+#PBS -l storage=gdata/xe2+gdata/v10+gdata/ka08+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+
+# Paddock-median + 200 m window CFI extraction. Same shape as stage 1 of the segmentation
+# pipeline — datacube I/O bound — so the same conclusion applies: 1 CPU / 4 GB is the
+# cheapest bookable `normal` unit and extra cores would be billed while idle. Measured
+# ~15 s/trial, so a 50-trial chunk needs ~15 min; the 4 h walltime is slack for slow scenes.
+#
+# Results are appended per trial and a rerun skips TrialCodes already present, so a walltime
+# kill resumes rather than restarting.
+
+set -euo pipefail
+: "${SITES:?set -v SITES=}"
+: "${POLYDIR:?set -v POLYDIR=}"
+: "${OUT:?set -v OUT=}"
+
+export PROJ_NETWORK=OFF
+export DATACUBE_CONFIG_PATH=/g/data/v10/public/modules/dea/20231204/datacube.conf
+PY=/g/data/xe2/John/geospatenv/bin/python
+
+cd /home/147/cb8590/Projects/paddock-species/src/paddocks
+echo "extract_paddock SITES=$SITES OUT=$OUT"
+$PY extract_paddock.py --sites "$SITES" --polydir "$POLYDIR" --out "$OUT" ${EXTRA_ARGS:-}
+echo "Done extract_paddock"

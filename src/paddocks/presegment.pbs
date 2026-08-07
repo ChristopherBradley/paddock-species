@@ -1,0 +1,38 @@
+#!/bin/bash
+#PBS -N presegment
+#PBS -P xe2
+#PBS -q normal
+#PBS -l ncpus=1
+#PBS -l mem=4GB
+#PBS -l walltime=02:00:00
+#PBS -l storage=gdata/xe2+gdata/v10+gdata/ka08+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+
+# Stage 1: Fourier-of-NDWI composites. Pure datacube I/O + one FFT — NO GPU.
+# On `normal` the charge is max(ncpus, mem/4GB) x 2 SU/hr, so 1 CPU / 4 GB is the cheapest
+# bookable unit and anything larger must earn its keep in walltime. Defaults are that unit;
+# override per-job with `qsub -l ncpus=N -l mem=XGB`.
+#
+# Sized for the ~3 km AOIs that make_aois.py produces (~300x300 px x ~70 scenes).
+#
+# 4 GB IS NOT ENOUGH FOR RECENT YEARS. On the 1,362-AOI run this OOM-killed (exit 137) the
+# chunk holding the 2024 AOIs: S2A+S2B+S2C now fly, so revisit density — and therefore the
+# NDWI cube held in memory — is far higher than in the 2017-2020 years the 4 GB figure was
+# benchmarked on. Memory scales with n_scenes x pixels, so use `-l mem=8GB` for 2023+ or for
+# any AOI wider than ~5 km. That doubles the charge (normal bills max(ncpus, mem/4GB)), which
+# is why it is not the default for the older, cheaper majority.
+
+set -euo pipefail
+: "${AOIS:?set -v AOIS=}"
+OUTDIR=${OUTDIR:-/scratch/xe2/cb8590/paddock-species-data/derived/samgeo}
+
+export PROJ_NETWORK=OFF          # compute nodes have no internet; see MEMORY.md root cause
+export DATACUBE_CONFIG_PATH=/g/data/v10/public/modules/dea/20231204/datacube.conf
+PY=/g/data/xe2/John/geospatenv/bin/python
+
+cd /home/147/cb8590/Projects/paddock-species/src/paddocks
+echo "presegment AOIS=$AOIS OUTDIR=$OUTDIR ncpus=${PBS_NCPUS:-?}"
+$PY samgeo_segment.py presegment --aois "$AOIS" --outdir "$OUTDIR"
+echo "Done presegment"
