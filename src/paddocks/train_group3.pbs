@@ -1,0 +1,29 @@
+#!/bin/bash
+#PBS -N train_group3
+#PBS -P xe2
+#PBS -q normal
+#PBS -l ncpus=12
+#PBS -l mem=32GB
+#PBS -l walltime=01:00:00
+#PBS -l storage=gdata/xe2+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+
+# The 3-group model. 12 CPUs because permutation importance dominates this script and scales
+# with cores (n_jobs=-1) — a 4-CPU attempt was still on config 1 of 2 at 90 min and would have
+# hit walltime, losing everything, since the report only flushes when the file closes.
+set -euo pipefail
+export PROJ_NETWORK=OFF
+export OMP_NUM_THREADS=1     # importance runs 12 processes; OpenMP threads on top thrash
+PY=/g/data/xe2/John/geospatenv/bin/python
+D=/scratch/xe2/cb8590/paddock-species-data/derived
+REPO=/home/147/cb8590/Projects/paddock-species
+cd $REPO/src/paddocks
+$PY train_species.py \
+    --indices "$D/samgeo/ts_v2/*_SENSITIVE.csv" --labeled $D/nvt_trials_labeled.csv \
+    --keep $D/figures/crop_heatmaps/cfi_heatmap_ALL_rows_SENSITIVE.csv \
+    --target group3 --importance-repeats 5 \
+    --confusion-png $REPO/output/figures/confusion_group3.png \
+    --out $REPO/output/GROUP3_MODEL.md
+echo "Done train_group3"

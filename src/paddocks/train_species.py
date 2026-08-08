@@ -225,6 +225,12 @@ def main():
                     help="group3 (default): Canola/Cereal/Legume, the distinctions actually "
                          "needed and the ones that survive the co-located-label problem. "
                          "species: all 9 crops, kept for the record — see --confusion-png.")
+    ap.add_argument("--importance-repeats", type=int, default=10,
+                    help="permutation-importance repeats; 0 skips it. This is the dominant "
+                         "cost of the whole script — it refits nothing but scores the model "
+                         "n_features x n_repeats times, and with n_jobs=-1 it silently scales "
+                         "with the cores available, so a run that took 10 min on a login node "
+                         "took >90 min on a 4-CPU PBS job.")
     ap.add_argument("--confusion-png", help="write the temporal-split confusion matrix as a "
                                             "heatmap figure (row-normalised)")
     ap.add_argument("--select-k", type=int, default=0,
@@ -379,10 +385,13 @@ def main():
         # (shuffling a feature it overfit can raise accuracy), which is not a weak signal but
         # a broken measurement — the first version of this did exactly that.
         try:
+            if not args.importance_repeats:
+                raise RuntimeError("skipped by --importance-repeats 0")
             from sklearn.inspection import permutation_importance
             m = mk()
             m.fit(X[tr.values], y[tr.values])
-            imp = permutation_importance(m, X[~tr.values], y[~tr.values], n_repeats=10,
+            imp = permutation_importance(m, X[~tr.values], y[~tr.values],
+                                         n_repeats=args.importance_repeats,
                                          scoring="f1_macro", random_state=0,
                                          n_jobs=-1).importances_mean
             I = pd.Series(imp, index=F.columns)

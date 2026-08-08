@@ -197,6 +197,34 @@ def build(args):
           f"{os.path.basename(__file__)} ingest")
 
 
+def refresh(args):
+    """Re-copy the review-layer verdicts onto the trials layer, in place.
+
+    The verdict lives on the POLYGON (one judgement covers all its trials) but is most usable
+    on the POINTS: QGIS scales point markers with zoom while polygons keep their true extent,
+    so at a state-wide zoom the polygons vanish to slivers and the points stay readable. That
+    means the attribute has to be duplicated onto the trials layer — and a duplicate goes
+    stale the moment the review layer is edited, which is why this is a re-runnable command
+    rather than something done once at build time.
+
+    Only the trials layer is rewritten. The review layer, with your edits, is read and left
+    exactly as it is.
+    """
+    R = gpd.read_file(args.out, layer="review")
+    T = gpd.read_file(args.out, layer="trials")
+    cols = ["verdict", "reason", "review_batch", "triage_flag", "flag_reason"]
+    have = [c for c in cols if c in R.columns]
+    idx = R.set_index("poly_id")
+    for c in have:
+        T[c] = T.poly_id.map(idx[c])
+    T["verdict"] = T.verdict.fillna("")
+    T.to_file(args.out, layer="trials", driver="GPKG")
+    n = int((T.verdict.astype(str).str.len() > 0).sum())
+    print(f"trials layer refreshed: {len(T)} points, {n} carrying a verdict")
+    print(f"  columns added: {', '.join(have)}")
+    print(f"  {T.verdict.value_counts().to_dict()}")
+
+
 def ingest(args):
     R = gpd.read_file(args.out, layer="review")
     done = R[R.verdict.isin(["good", "bad", "redraw"])]
@@ -224,7 +252,10 @@ def ingest(args):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=["build", "ingest"])
+    ap.add_argument("mode", choices=["build", "refresh", "ingest"],
+                    help="build: create the package (OVERWRITES, discarding any review edits). "
+                         "refresh: copy verdicts onto the trials layer, edits preserved. "
+                         "ingest: turn verdicts into a training filter.")
     ap.add_argument("--chosen-gpkg")
     ap.add_argument("--out", required=True)
     ap.add_argument("--trials-out")
@@ -235,6 +266,8 @@ def main():
     args = ap.parse_args()
     if args.mode == "build":
         build(args)
+    elif args.mode == "refresh":
+        refresh(args)
     else:
         ingest(args)
 
