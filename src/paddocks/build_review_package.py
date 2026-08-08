@@ -116,11 +116,14 @@ def build(args):
         R["filt_gpkg"] = R.poly_id.map(first).map(t2.filt).fillna("")
 
     R["conflict"] = R.n_crops > 1
-    R["triage_flag"] = ((R.dist_m > 25) | (R.paddock_ha < 2)
+    # 3 ha, not 2: the one polygon the validation batch caught as bad (a trial site with the
+    # surrounding paddock missed) is 2.8 ha, so a 2 ha cut let it through. 3 ha catches it for
+    # +40 polygons of extra review — cheap insurance given the mode it represents.
+    R["triage_flag"] = ((R.dist_m > 25) | (R.paddock_ha < 3)
                         | (R.paddock_ha > 300) | R.conflict)
     R["flag_reason"] = (
         pd.Series(np.where(R.dist_m > 25, "point_outside;", ""), index=R.index)
-        + np.where(R.paddock_ha < 2, "too_small;", "")
+        + np.where(R.paddock_ha < 3, "too_small;", "")
         + np.where(R.paddock_ha > 300, "too_big;", "")
         + np.where(R.conflict, "crop_conflict;", ""))
     R["verdict"] = ""

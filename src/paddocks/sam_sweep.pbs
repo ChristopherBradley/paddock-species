@@ -1,0 +1,35 @@
+#!/bin/bash
+#PBS -N sam_sweep
+#PBS -P xe2
+#PBS -q gpuvolta
+#PBS -l ncpus=12
+#PBS -l ngpus=1
+#PBS -l mem=64GB
+#PBS -l walltime=02:00:00
+#PBS -l storage=gdata/xe2+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+
+# Does a denser SAM prompt grid fix the under-segmentation that dominates the review queue?
+# Stage 2 only — the Fourier-NDWI composites already exist and are symlinked in, so there are
+# no datacube reads. GPU because SAM is compute-bound (measured 121x over 4 CPUs).
+#
+# pps32 is the CONTROL: it reproduces the production run, so any difference at pps64 is
+# attributable to the parameter rather than to rerunning. Without it a "better" result could
+# just be SAM's own nondeterminism or a changed library version.
+
+set -euo pipefail
+export PROJ_NETWORK=OFF
+PY=/g/data/xe2/John/geospatenv/bin/python
+D=/scratch/xe2/cb8590/paddock-species-data/derived
+S=$D/samgeo/sweep
+cd /home/147/cb8590/Projects/paddock-species/src/paddocks
+
+$PY samgeo_segment.py segment --aois $S/aois.csv --outdir $S/pps32 --force \
+    --points-per-side 32
+$PY samgeo_segment.py segment --aois $S/aois.csv --outdir $S/pps64 --force \
+    --points-per-side 64
+$PY samgeo_segment.py segment --aois $S/aois.csv --outdir $S/pps64_crop1 --force \
+    --points-per-side 64 --crop-n-layers 1
+echo "Done sam_sweep"

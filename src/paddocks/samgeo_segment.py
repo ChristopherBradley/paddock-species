@@ -119,6 +119,26 @@ def build_image(lat, lon, half_m, start, end, out_tif, resolution=10):
     return int(ds.sizes["time"]), img.shape
 
 
+def sam_kwargs(args):
+    """SamAutomaticMaskGenerator settings, or None for the library defaults.
+
+    The original runs passed `sam_kwargs=None`, i.e. points_per_side=32 over the whole AOI.
+    That is the direct cause of the dominant review failure mode: at 32 prompt points across a
+    ~3 km tile, adjacent fields of similar wetness get merged into one mask, which surfaces as
+    "whole region, not a paddock" (222 flagged polygons over 300 ha, up to 1,048 ha) and as
+    co-located trials of different crops landing on one polygon. Raising the sampling density
+    is the first thing to try, and it costs GPU time roughly quadratically.
+    """
+    kw = {k: v for k, v in {
+        "points_per_side": args.points_per_side,
+        "pred_iou_thresh": args.pred_iou_thresh,
+        "stability_score_thresh": args.stability_score_thresh,
+        "crop_n_layers": args.crop_n_layers,
+        "min_mask_region_area": args.min_mask_region_area,
+    }.items() if v is not None}
+    return kw or None
+
+
 def filter_polygons(gpkg, filt, min_area_ha, max_area_ha, max_compactness):
     """Area + shape filter. Returns (n_raw, n_kept, median_ha)."""
     import geopandas as gpd
@@ -192,9 +212,10 @@ def do_segment(args):
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     # The whole point of batching: this is paid once, not once per AOI.
     t = time.time()
-    sam = SamGeo(model_type="vit_h", checkpoint=args.checkpoint, sam_kwargs=None)
+    sam = SamGeo(model_type="vit_h", checkpoint=args.checkpoint, sam_kwargs=sam_kwargs(args))
     load_s = time.time() - t
     print(f"SAM on {dev}, model load {load_s:.0f}s, {len(todo)} AOIs to segment", flush=True)
+    print(f"sam_kwargs={sam_kwargs(args)}", flush=True)
 
     for i, a in enumerate(todo, 1):
         p = aoi_paths(args.outdir, a["stub"])
@@ -277,6 +298,18 @@ def main():
                             "PaddockTS's perimeter:area which depends on its area units")
         p.add_argument("--checkpoint",
                        default="/g/data/xe2/John/Data/PadSeg/sam_vit_h_4b8939.pth")
+        # All default to None so the library defaults are used and existing runs reproduce
+        # exactly. Only a value explicitly passed enters sam_kwargs.
+        p.add_argument("--points-per-side", type=int, default=None,
+                       help="SAM prompt grid density (library default 32). Higher splits "
+                            "merged fields; cost grows ~quadratically")
+        p.add_argument("--pred-iou-thresh", type=float, default=None,
+                       help="library default 0.88; lower admits more, weaker masks")
+        p.add_argument("--stability-score-thresh", type=float, default=None,
+                       help="library default 0.95; lower admits more, weaker masks")
+        p.add_argument("--crop-n-layers", type=int, default=None,
+                       help="library default 0; 1 re-runs on crops, catching small fields")
+        p.add_argument("--min-mask-region-area", type=int, default=None)
 
     p1 = sub.add_parser("presegment", help="stage 1: Fourier-NDWI composites (no GPU)")
     p1.add_argument("--aois", required=True)
