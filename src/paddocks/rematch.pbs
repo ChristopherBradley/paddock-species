@@ -1,0 +1,29 @@
+#!/bin/bash
+#PBS -N rematch_paddocks
+#PBS -P xe2
+#PBS -q normal
+#PBS -l ncpus=1
+#PBS -l mem=8GB
+#PBS -l walltime=03:00:00
+#PBS -l storage=gdata/xe2+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+
+# Matching-only pass under the collision-aware upgrade rule. Reads ~2,400 _filt.gpkg files and
+# does point-in-polygon; no datacube, so this is I/O-bound and the "1 CPU / 4 GB is cheapest"
+# rule DOES apply here (unlike the model-fitting jobs). 8 GB for the larger AOI polygon sets.
+
+set -euo pipefail
+export PROJ_NETWORK=OFF
+PY=/g/data/xe2/John/geospatenv/bin/python
+D=/scratch/xe2/cb8590/paddock-species-data/derived
+REPO=/home/147/cb8590/Projects/paddock-species
+
+cd $REPO/src/paddocks
+$PY rematch_paddocks.py \
+    --chunks "cw=$D/samgeo/ts_v2/chunks/cw_*.csv=$D/samgeo/full" \
+             "other=$D/samgeo/ts_v2/chunks/other_*.csv=$D/samgeo/other" \
+    --old-gpkg $D/figures/crop_heatmaps/cfi_heatmap_ALL_SENSITIVE.gpkg \
+    --out $D/figures/crop_heatmaps/cfi_heatmap_ALL_REMATCHED_SENSITIVE.gpkg
+echo "Done rematch"

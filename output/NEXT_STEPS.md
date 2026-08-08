@@ -1,3 +1,18 @@
+> **SUPERSEDED IN TWO PLACES, 2026-08-08.** Read `LABEL_QUALITY.md` and `MODEL_UNCERTAINTY.md`
+> before acting on this document.
+>
+> 1. **Section 1's "not mainly a data-quality problem" is wrong as stated.** It tested only
+>    per-trial drivers and so could not see the real defect, which is *between* trials:
+>    31.8 % of training trials share their paddock polygon with a different-crop trial in the
+>    same year, and canola on such a polygon reads 482 CFI lower [+348, +551]. The signal
+>    damage is real. (Dropping those trials does not measurably improve the model, though —
+>    see `LABEL_QUALITY.md`.)
+> 2. **Section 2's bands-vs-indices conclusion is over-read.** The macro-F1 gap it rests on is
+>    -0.015 [-0.058, +0.027], i.e. noise. The canola-specific loss is real (-11.0 pp
+>    [-16.1, -1.0]) and does support the CFI-nonlinearity explanation.
+>
+> The headline canola result survives: +33.0 pp [+18.5, +47.0] over a per-season CFI threshold.
+
 # Where the project stands, and what to do next
 
 Written 2026-08-07 overnight, answering two questions: is the panel-to-panel separability

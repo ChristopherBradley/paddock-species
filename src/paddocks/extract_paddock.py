@@ -76,7 +76,8 @@ def indices_from(ds, keep):
 
 
 def match_polygon(poly, pt, max_dist_m, min_paddock_ha=10.0, upgrade_ratio=3.0,
-                  upgrade_search_m=150.0, max_upgrade_compactness=6.0):
+                  upgrade_search_m=150.0, max_upgrade_compactness=6.0,
+                  claimed=None, crop=None):
     """(geometry, rule, edge_distance_m) for the trial point, or (None, 'none', nan).
 
     Plain "containing polygon, else nearest" is not enough. Reviewing the pilot in imagery
@@ -101,6 +102,18 @@ def match_polygon(poly, pt, max_dist_m, min_paddock_ha=10.0, upgrade_ratio=3.0,
         identified as spanning neighbouring paddocks and forest ⇒ blocked, correct.
     The 10 ha default likewise sits between those two chosen areas: it catches the 5.1 ha
     strip while leaving the acceptable 11.6 ha match alone.
+
+    UPGRADING IS BLOCKED ONTO A POLYGON ANOTHER CROP HAS ALREADY CLAIMED (`claimed`: a dict of
+    polygon index -> crop, for trials already matched in this AOI and year). Measured
+    2026-08-08, this rule was a primary generator of the project's largest label problem:
+    72.3 % of upgraded matches landed on a polygon also used by another trial, and 41.9 % of
+    upgraded trials ended up sharing with a DIFFERENT crop against 30.6 % of non-upgraded
+    ones. That matters because NVT co-locates several crop trials in one field, so upgrading
+    two of them out of their own small plots and into the surrounding paddock gives them an
+    identical time series under contradictory labels. Canola on such a polygon reads 482 CFI
+    lower [95 % CI 348, 551] than canola on an unshared one — the median is averaging canola
+    with its neighbour. Keeping the smaller original polygon is the lesser evil: it is at
+    least the trial's own ground.
     """
     hit = poly[poly.contains(pt)]
     if len(hit):
@@ -123,6 +136,11 @@ def match_polygon(poly, pt, max_dist_m, min_paddock_ha=10.0, upgrade_ratio=3.0,
             # largest overall, so a neighbouring blob cannot win on size alone.
             ok = near[(near._comp <= max_upgrade_compactness) &
                       (near._ha >= upgrade_ratio * max(area_ha, 0.01))].copy()
+            if claimed:
+                # Only a DIFFERENT crop's claim blocks the upgrade. Two trials of the same crop
+                # sharing a paddock duplicates a sample but does not contradict a label, and
+                # under NVT protocol the surrounding paddock is that same crop anyway.
+                ok = ok[[claimed.get(j, crop) == crop for j in ok.index]]
             if len(ok):
                 # NEAREST eligible paddock, not the largest. The trial sits on the edge of
                 # the field it belongs to, so "the big paddock immediately alongside" is the
@@ -202,6 +220,13 @@ def main():
         print(f"resuming: {len(done)} trials already done")
 
     poly_cache = {}
+    # Which polygon each already-matched trial took, per (AOI, year), so the upgrade rule can
+    # refuse to move a trial onto ground another crop has claimed. Sorting by AOI and year
+    # keeps co-located trials adjacent, so the claims are populated before their neighbours
+    # are matched rather than after.
+    claims = {}
+    sites = sites.sort_values(["aoi_stub", "Year"]) if "Year" in sites.columns \
+        else sites.sort_values("aoi_stub")
     n_ok = n_skip = 0
     for _, r in sites.iterrows():
         if r["TrialCode"] in done:
@@ -219,7 +244,15 @@ def main():
 
         pt = gpd.GeoSeries([Point(float(r["lon"]), float(r["lat"]))],
                            crs="EPSG:4326").to_crs("EPSG:3577").iloc[0]
-        geom, rule, edge_m = match_polygon(poly, pt, args.max_dist_m, **match_kw)
+        ckey = (stub, r.get("Year"))
+        geom, rule, edge_m = match_polygon(poly, pt, args.max_dist_m,
+                                           claimed=claims.get(ckey), crop=r.get("crop"),
+                                           **match_kw)
+        if geom is not None:
+            # Record the claim by polygon index, which is what the upgrade filter looks up.
+            hit = poly.index[poly.geometry.geom_equals(geom)]
+            if len(hit):
+                claims.setdefault(ckey, {})[hit[0]] = r.get("crop")
         if geom is None:
             print(f"{r['TrialCode']}: no polygon within {args.max_dist_m} m", flush=True)
             n_skip += 1
