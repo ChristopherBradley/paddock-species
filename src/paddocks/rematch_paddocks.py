@@ -129,7 +129,13 @@ def main():
     new["paddock_ha_old"] = new.TrialCode.map(o.paddock_ha)
     new["cfi_peak"] = new.TrialCode.map(o.cfi_peak)          # STALE where changed=1
     new["gkey_old"] = new.TrialCode.map(o.gkey)
-    new["changed"] = (new.gkey != new.gkey_old).astype(int)
+    # THREE states, not a boolean. A plain `gkey != gkey_old` marked every trial absent from
+    # the previous run as "changed", because comparing against a missing value is always true
+    # — 897 of them, against 28 real changes, so the file said 925 and the console said 28.
+    # A trial that did not exist before has not changed; it is new.
+    new["status"] = np.where(new.gkey_old.isna(), "new",
+                     np.where(new.gkey != new.gkey_old, "changed", "unchanged"))
+    new["changed"] = (new.status == "changed").astype(int)
 
     # Before/after must be computed on the SAME trials. The new run matches more trials than
     # the old gpkg holds, and a conflict flag depends on who else is in the population — so

@@ -39,6 +39,16 @@ BIN_START, BIN_END, BIN_STEP = 90, 350, 20
 BANDS = ["blue", "green", "red", "red_edge_1", "red_edge_2", "red_edge_3",
          "nir_1", "nir_2", "swir_2", "swir_3"]
 
+# The default target is the THREE-GROUP split, on the user's instruction (2026-08-08): these
+# are the distinctions they actually need, and separating wheat from barley from oat was never
+# working (F1 0.22, 0.00). It is also the better-posed problem, not merely the easier one —
+# co-located trials at an NVT site are usually of the same agronomic group, so collapsing
+# resolves 540 of the 788 same-polygon label conflicts (69 %) rather than hiding them.
+# Measured: macro F1 0.78-0.82 on groups against 0.38 on species.
+GROUP = {"Canola": "Canola", "Wheat": "Cereal", "Barley": "Cereal", "Oat": "Cereal",
+         "Chickpea": "Legume", "Faba Bean": "Legume", "Field Pea": "Legume",
+         "Lentil": "Legume", "Lupin": "Legume"}
+
 
 def family(col):
     """Feature -> its band/index family, for summing importance.
@@ -158,6 +168,48 @@ def evaluate(name, Xtr, ytr, Xte, yte, model, classes, f):
     return {"split": name, "macro_f1": macro, "bal_acc": bal}
 
 
+def save_confusion(Xtr, ytr, Xte, yte, model, classes, png, target):
+    """Confusion matrix as a heatmap — the archival record of what species-level got to.
+
+    Row-normalised, because the classes are wildly imbalanced (wheat 835, lentil 81) and a
+    raw-count image just shows which class is common. Counts are printed inside the cells so
+    nothing is hidden by the normalisation.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from sklearn.metrics import confusion_matrix, f1_score
+
+    model.fit(Xtr, ytr)
+    pred = model.predict(Xte)
+    cm = confusion_matrix(yte, pred, labels=classes)
+    row = cm.sum(1, keepdims=True)
+    frac = np.divide(cm, row, out=np.zeros_like(cm, float), where=row > 0)
+
+    n = len(classes)
+    fig, ax = plt.subplots(figsize=(1.05 * n + 3.2, 1.0 * n + 2.4))
+    im = ax.imshow(frac, cmap="Blues", vmin=0, vmax=1)
+    ax.set_xticks(range(n), classes, rotation=45, ha="right")
+    ax.set_yticks(range(n), classes)
+    ax.set_xlabel("predicted")
+    ax.set_ylabel("true")
+    macro = f1_score(yte, pred, average="macro", labels=classes, zero_division=0)
+    ax.set_title(f"{target}: temporal transfer (train <=2022, test 2023-24)\n"
+                 f"macro F1 {macro:.3f}, chance {1/n:.3f} — row-normalised, counts in cells",
+                 fontsize=10)
+    for i in range(n):
+        for j in range(n):
+            if cm[i, j]:
+                ax.text(j, i, cm[i, j], ha="center", va="center", fontsize=8,
+                        color="white" if frac[i, j] > 0.5 else "black")
+    fig.colorbar(im, ax=ax, label="fraction of true class", fraction=0.046)
+    fig.tight_layout()
+    os.makedirs(os.path.dirname(os.path.abspath(png)), exist_ok=True)
+    fig.savefig(png, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"confusion heatmap -> {png}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--bands", nargs="*", default=[], help="glob(s) of 10-band time series")
@@ -169,6 +221,12 @@ def main():
     ap.add_argument("--with-geo", action="store_true")
     ap.add_argument("--min-obs", type=int, default=10)
     ap.add_argument("--model", choices=["hgb", "rf"], default="hgb")
+    ap.add_argument("--target", choices=["group3", "species"], default="group3",
+                    help="group3 (default): Canola/Cereal/Legume, the distinctions actually "
+                         "needed and the ones that survive the co-located-label problem. "
+                         "species: all 9 crops, kept for the record — see --confusion-png.")
+    ap.add_argument("--confusion-png", help="write the temporal-split confusion matrix as a "
+                                            "heatmap figure (row-normalised)")
     ap.add_argument("--select-k", type=int, default=0,
                     help="keep only the K best features (ANOVA F), selected INSIDE each "
                          "training fold. Use to test whether a richer feature set loses to a "
@@ -233,7 +291,10 @@ def main():
     meta = lab.set_index("TrialCode").loc[F.index, ["crop", "Year", "site", "state"]]
     # A feature that is NaN for every trial carries nothing and only slows the fit.
     F = F.loc[:, F.notna().any()]
-    X, y = F.values, meta.crop.values
+    X = F.values
+    y = (meta.crop.map(GROUP).values if args.target == "group3" else meta.crop.values)
+    if args.target == "group3" and pd.isna(y).any():
+        raise SystemExit(f"unmapped crops: {sorted(set(meta.crop[pd.isna(y)]))}")
     classes = sorted(pd.Series(y).value_counts().index.tolist())
     print(f"feature matrix {X.shape}, {len(classes)} classes")
 
@@ -276,6 +337,10 @@ def main():
         results.append(evaluate(f"Temporal transfer — train <=2022, test 2023-24",
                                 X[tr.values], y[tr.values], X[~tr.values], y[~tr.values],
                                 mk(), classes, f))
+
+        if args.confusion_png:
+            save_confusion(X[tr.values], y[tr.values], X[~tr.values], y[~tr.values],
+                           mk(), classes, args.confusion_png, args.target)
 
         # Spatial transfer, grouped on site
         gkf = GroupKFold(n_splits=5)

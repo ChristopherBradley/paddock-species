@@ -1,0 +1,31 @@
+#!/bin/bash
+#PBS -N train_targets
+#PBS -P xe2
+#PBS -q normal
+#PBS -l ncpus=4
+#PBS -l mem=16GB
+#PBS -l walltime=02:00:00
+#PBS -l storage=gdata/xe2+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+
+# Archive the species-level confusion matrix, then train the 3-group model that replaces it.
+set -euo pipefail
+export PROJ_NETWORK=OFF
+export OMP_NUM_THREADS=4
+PY=/g/data/xe2/John/geospatenv/bin/python
+D=/scratch/xe2/cb8590/paddock-species-data/derived
+REPO=/home/147/cb8590/Projects/paddock-species
+cd $REPO/src/paddocks
+
+COMMON="--indices $D/samgeo/ts_v2/*_SENSITIVE.csv --labeled $D/nvt_trials_labeled.csv \
+        --keep $D/figures/crop_heatmaps/cfi_heatmap_ALL_rows_SENSITIVE.csv"
+
+$PY train_species.py $COMMON --target species \
+    --confusion-png $REPO/output/figures/confusion_species.png \
+    --out $REPO/output/SPECIES_MODEL_9class_archive.md
+$PY train_species.py $COMMON --target group3 \
+    --confusion-png $REPO/output/figures/confusion_group3.png \
+    --out $REPO/output/GROUP3_MODEL.md
+echo "Done train_targets"

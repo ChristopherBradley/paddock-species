@@ -77,7 +77,7 @@ def indices_from(ds, keep):
 
 def match_polygon(poly, pt, max_dist_m, min_paddock_ha=10.0, upgrade_ratio=3.0,
                   upgrade_search_m=150.0, max_upgrade_compactness=6.0,
-                  claimed=None, crop=None):
+                  claimed=None, crop=None, block_claimed=False):
     """(geometry, rule, edge_distance_m) for the trial point, or (None, 'none', nan).
 
     Plain "containing polygon, else nearest" is not enough. Reviewing the pilot in imagery
@@ -136,10 +136,17 @@ def match_polygon(poly, pt, max_dist_m, min_paddock_ha=10.0, upgrade_ratio=3.0,
             # largest overall, so a neighbouring blob cannot win on size alone.
             ok = near[(near._comp <= max_upgrade_compactness) &
                       (near._ha >= upgrade_ratio * max(area_ha, 0.01))].copy()
-            if claimed:
-                # Only a DIFFERENT crop's claim blocks the upgrade. Two trials of the same crop
-                # sharing a paddock duplicates a sample but does not contradict a label, and
-                # under NVT protocol the surrounding paddock is that same crop anyway.
+            if claimed and block_claimed:
+                # OFF BY DEFAULT, on the user's instruction (2026-08-08): "I don't want any
+                # trial sites in the training data, each sample should be the full paddock
+                # around the trial site instead." Blocking the upgrade is what left a trial
+                # sitting on its own plot — the 28 trials it moved went from a median 78.3 ha
+                # paddock to a 3.1 ha strip, which is the outcome they are ruling out. The
+                # label conflict it was meant to prevent is instead handled downstream: the
+                # 3-group collapse resolves 69 % of conflicts, and manual review catches the
+                # rest. Kept behind a flag because the conflict it targets is real and
+                # measured (+482 CFI dilution); it is the remedy, not the diagnosis, that the
+                # user rejected.
                 ok = ok[[claimed.get(j, crop) == crop for j in ok.index]]
             if len(ok):
                 # NEAREST eligible paddock, not the largest. The trial sits on the edge of
