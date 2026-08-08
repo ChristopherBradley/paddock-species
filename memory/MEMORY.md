@@ -472,6 +472,58 @@ would discard mostly-good data. Shape and size are what review actually caught i
 examples, tunable via `--max-compactness`), `too_big` >300 ha (142), `too_small` <5 ha (142),
 <15 clear obs (27), `treed` >20 % (4). 3,439 -> 2,484 trials.
 
+## TARGET IS NOW 3 GROUPS (2026-08-08, user's decision) — `GROUP3_MODEL.md`
+Canola / Cereal / Legume, replacing 9-class species. `train_species.py --target` defaults to
+`group3`; species kept only for the archived confusion matrix.
+- **Temporal macro F1 0.716, spatial 0.707** (chance 0.333), full 659-trial test set.
+  Cereal F1 0.82, Canola 0.76, **Legume 0.57 (precision 0.51) — the remaining headroom**.
+- **Spatial ≈ temporal now (0.707 vs 0.716)**, where 9-class was 0.273 vs 0.316. Generalising
+  over the fence was the harder test and grouping largely closed it. Best news in the run.
+- **BEWARE the 0.78-0.82 figure in `LABEL_QUALITY.md`** — that is the CLEAN test subset (323
+  trials, no co-location/conflict), which is smaller, easier, and 41.8 % canola vs 14.1 % in
+  the rest. **Quote 0.716.** A restricted-subset score is not comparable to a full-set one.
+- Justified by the species confusion matrix, not just convenience: errors are almost entirely
+  WITHIN the groups (Barley->Wheat 60 vs 15 correct, Oat->Wheat 19 vs 0, chickpea+lentil both
+  into field pea). Collapsing merges distinctions the model never made.
+
+## PSEUDO-LABELLING CANOLA RULED OUT (2026-08-08) — `CANOLA_PSEUDO_LABELS.md`
+- **Precision is prevalence-dependent; TPR/FPR are not.** NVT is 27.5 % canola, a real
+  landscape ~5-10 %. Peak CFI hits 99 % precision at 0.9 % recall in-sample, but the same rule
+  gives 84.7 % precision at 10 % prevalence and 72.5 % at 5 %. **Never carry a precision figure
+  from a curated set to the wild — carry TPR/FPR.**
+- **The confidently-labelled paddocks are the ones already classified correctly**: model recall
+  100 % on the top CFI decile, 93 % at 75-90th, **62 % on the bottom half**. A confidence rule
+  selects from the top by construction, so the selection mechanism and the failure mechanism
+  are the same mechanism. Self-training would sharpen the boundary, not extend it.
+- Right way to use unlabelled paddocks is self-supervised pre-training (Presto), which selects
+  on nothing.
+
+## PADDOCK REVIEW IS THE CRITICAL PATH (2026-08-08) — `build_review_package.py`
+User is reviewing all polygons by hand before publishing. **Review by POLYGON not trial: 3,222
+trials share 1,973 distinct polygons (39 % less work).** Triage catches 17/17 hand-judged bad
+at 2/19 false-flagged, via THREE different signals — point >25 m outside (192), area >300 ha
+(222), crop conflict (207). In-sample on 36 points, hence a 150-polygon `validation` batch
+sampled from the UNFLAGGED pile to measure the miss rate rather than assume it.
+- **MY WRONG CONCLUSION, worth remembering as a class.** I declared "no geometric rule can
+  separate good from bad" from two polygons 0.1 ha apart with opposite verdicts — having tested
+  only AREA and COMPACTNESS. Containment separates them cleanly (0 m vs 137 m). The trap:
+  `match_rule` reads `contains+upgraded_...` where "contains" describes the polygon the point
+  fell in BEFORE the upgrade moved the match. **All 259 upgraded matches have their point
+  OUTSIDE the polygon they ended up with**; the upgrade searches to 150 m, enough to cross a
+  road. **"No rule can separate these" is only ever a statement about the features tried.**
+- User's policy: **full paddock always, never the trial site.** The collision-aware upgrade
+  block is therefore OFF by default (it was leaving trials on 3.1 ha strips).
+- `link_tifs_by_trial.py` exposes the Fourier-NDWI composite SAM segmented as
+  `by_trial/<TrialCode>_ndwi.tif` (symlinks, 884 KB for 1.6 GB of composites).
+
+## PBS SIZING: permutation_importance dominates `train_species.py` (2026-08-08)
+It uses `n_jobs=-1`, so **runtime scaled silently with ambient core count**: ~10 min on a login
+node (many cores), **>90 min unfinished on 4 CPUs**, **75 s on 12 CPUs** with
+`--importance-repeats 5`. The 4-CPU job would have hit walltime and lost everything, because
+the report only flushes when the file closes. Set `OMP_NUM_THREADS=1` when the importance
+workers are already using every core. **A script whose runtime depends on ambient hardware is
+a trap — make the cost an explicit flag.**
+
 ## CO-LOCATED TRIALS SHARE ONE PADDOCK — the label problem (2026-08-08)
 User's correction: when they asked about "data quality" they meant **bad paddock
 segmentation**, not cloud gaps. They were right and `separability_diagnosis.py` could not

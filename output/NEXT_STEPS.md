@@ -1,203 +1,164 @@
-> **SUPERSEDED IN TWO PLACES, 2026-08-08.** Read `LABEL_QUALITY.md` and `MODEL_UNCERTAINTY.md`
-> before acting on this document.
->
-> 1. **Section 1's "not mainly a data-quality problem" is wrong as stated.** It tested only
->    per-trial drivers and so could not see the real defect, which is *between* trials:
->    31.8 % of training trials share their paddock polygon with a different-crop trial in the
->    same year, and canola on such a polygon reads 482 CFI lower [+348, +551]. The signal
->    damage is real. (Dropping those trials does not measurably improve the model, though —
->    see `LABEL_QUALITY.md`.)
-> 2. **Section 2's bands-vs-indices conclusion is over-read.** The macro-F1 gap it rests on is
->    -0.015 [-0.058, +0.027], i.e. noise. The canola-specific loss is real (-11.0 pp
->    [-16.1, -1.0]) and does support the CFI-nonlinearity explanation.
->
-> The headline canola result survives: +33.0 pp [+18.5, +47.0] over a per-season CFI threshold.
-
 # Where the project stands, and what to do next
 
-Written 2026-08-07 overnight, answering two questions: is the panel-to-panel separability
-swing a data-quality problem, and are we ready to train a species model for a 10 m map.
+Rewritten 2026-08-08, replacing the overnight version. Two decisions changed the shape of the
+project since then: the target is now **three groups, not nine species**, and the **paddock
+polygons are being reviewed by hand** before anything is published.
 
-Companion reports: `SEPARABILITY_DIAGNOSIS.md`, `SPECIES_MODEL_indices.md`,
-`SPECIES_MODEL_bands.md`, `CROP_HEATMAPS.md`.
+Companion reports: `GROUP3_MODEL.md`, `LABEL_QUALITY.md`, `MODEL_UNCERTAINTY.md`,
+`CANOLA_PSEUDO_LABELS.md`, `CROP_HEATMAPS.md`, `SEPARABILITY_DIAGNOSIS.md`.
 
 ---
 
-## 1. The separability swing is NOT mainly a data-quality problem
+## 1. The target is Canola / Cereal / Legume
 
-Measured on 32 year x state panels, separability = AUC of max CFI in DOY 200-300, canola vs
-all other crops. Range **0.51 to 0.99**, sd 0.129.
+Species-level never worked and the confusion matrix (`figures/confusion_species.png`) shows
+why: the errors are almost entirely *within* the proposed groups. Barley→Wheat 60 against 15
+correct, Oat→Wheat 19 against 0 correct, chickpea and lentil both collapsing into field pea.
+Canola is the only species that stands clear. Collapsing therefore merges the distinctions the
+model was never making, rather than discarding ones it had.
 
-- **Sampling noise alone explains ~24 % of the variance** (resampling the pooled distribution
-  at each panel's n gives sd 0.064). So ~76 % is a real panel effect — the swing is not just
-  small-n jitter, and your instinct that something systematic is going on is right.
-- **The only driver whose 95 % CI excludes zero is season vigour** — median NDVI amplitude,
-  r = +0.41 [+0.03, +0.73]. Panels where the crop grew well separate well. That is an
-  agronomic effect, not a measurement one, and it matches the literature note that canola
-  separability is drought-sensitive.
-- **Every data-quality candidate came back indistinguishable from zero:** max cloud gap in
-  the flowering window (+0.10), fraction of trials with a >21 d gap (+0.09), fraction matched
-  by `contains` (+0.28), paddock size (-0.09), compactness (+0.04). None excludes zero.
+It is also better-posed, not merely easier. Co-located NVT trials are usually of the same
+agronomic group — pulse trials sit together, cereal trials sit together — so the collapse
+**resolves 540 of the 788 same-polygon label conflicts (69 %)** described in section 3.
 
-Read that as *no evidence for* the data-quality explanation rather than *evidence against* it:
-32 panels is an underpowered sample, and a real effect of r ~ 0.3 would not be detectable
-here. But the ranking is clear enough to act on — **more/cleaner observations is not the
-lever.** The lever is a model that can use a weak season's other signals, which is where
-the next section goes.
+### Result (`GROUP3_MODEL.md`, 3 indices, 2,477 paddocks)
 
-One counterintuitive result worth not over-reading: median flowering-window observation count
-correlates *negatively* with separability (-0.22, CI spans zero). That is almost certainly
-confounded — revisit density rose with S2C over exactly the years, regions and cloudiness that
-also changed — not evidence that more observations hurt.
-
-## 2. Are we ready to train a species model? Partly — and the answer splits by crop
-
-I built the classifier and ran it, rather than estimating. Paddock-median time series,
-features = each band binned to 20-day calendar DOY windows plus derived indices and
-whole-season shape, histogram gradient boosting, class-balanced, **geography excluded**
-(lat/lon/year would let the model learn that chickpea is a Queensland crop rather than what
-chickpea looks like).
-
-Two honest splits, both reported:
-- **temporal** — train <=2022, test 2023-24
-- **spatial** — 5-fold GroupKFold **on site**, so no location appears in train and test. This
-  matters more than it sounds: the same paddock recurs across years, and a random split would
-  let the model memorise locations and report a fantasy score.
-
-### Result: canola is close to solved; the other species are not
-
-From 3 indices alone (2,477 paddocks), temporal transfer:
-
-| | macro F1 | balanced acc |
+| split | macro F1 | balanced accuracy |
 |---|---|---|
-| 3 indices | 0.316 | 0.329 |
-| chance | 0.111 | 0.111 |
+| temporal (train <=2022, test 2023-24) | **0.716** | 0.719 |
+| spatial (GroupKFold on site) | **0.707** | 0.698 |
 
-But the macro number hides the shape of it:
+chance = 0.333.
 
-| crop | F1 | note |
+| group | F1 (temporal) | F1 (spatial) | note |
+|---|---|---|---|
+| Cereal | 0.82 | 0.82 | |
+| Canola | 0.76 | 0.73 | precision 0.84, recall 0.69 |
+| Legume | 0.57 | 0.57 | precision 0.51 — cereals leak into it |
+
+**Spatial and temporal transfer are now nearly equal (0.707 vs 0.716).** At species level they
+were 0.273 vs 0.316, a much larger gap. Generalising over the fence was the harder test and the
+grouped model has largely closed it, which is the single most encouraging number here.
+
+**Correction to a figure quoted earlier in conversation.** `LABEL_QUALITY.md` reports 0.78-0.82
+for the 3-group task; that was measured on the CLEAN test subset (323 trials with no
+co-location and no polygon conflict), which is both smaller and easier. On the full 659-trial
+test set the honest number is **0.716**. Quote 0.716; the clean-subset figure is only valid
+alongside its restriction, and that subset is also 41.8 % canola against 14.1 % in the rest.
+
+CFI dominates the signal (permutation importance +0.049, against NDVI +0.018 and NDYI
+negative), and its most useful forms are the season amplitude and the DOY 230-270 bins — the
+flowering window this project established in Stage 2.
+
+## 2. What is settled, with intervals
+
+From `MODEL_UNCERTAINTY.md` (paired bootstrap, 2,000 resamples). These supersede the overnight
+point estimates:
+
+- **Modelling beats thresholding, decisively**: canola at 5 % FPR, model minus per-season CFI
+  threshold = **+33.0 pp [+18.5, +47.0]**.
+- **Bands vs indices on macro F1 is NOISE**: -0.015 [-0.058, +0.027]. The overnight conclusion
+  that "ten bands do not beat three indices" was over-read on this metric and should not be
+  quoted.
+- **But the canola-specific loss is real**: -11.0 pp [-16.1, -1.0], which supports the
+  CFI-nonlinearity explanation — a band file can only reconstruct CFI from median reflectance,
+  and CFI is non-linear.
+- **Combined features help spatial transfer**: +0.027 [+0.005, +0.050].
+- The fits are deterministic across seeds, so no difference between runs is re-fit jitter.
+
+## 3. The critical path is the paddock review, not the model
+
+**This is the blocking item.** NVT runs several crop trials side by side in one field; SAM
+segments that field as one polygon; every trial there gets an identical time series under a
+different label. 69.7 % of trials share their polygon with another trial, **31.8 % with a
+different crop**. Measured within canola alone, so no class-mix confound: canola on a shared
+polygon reads median CFI **1489 against 1971** unshared, a gap of **+482 [+348, +551]**.
+
+Whether cleaning it helps the model is **not established**: against a size-matched random
+control, dropping co-located trials gives +0.027 [-0.052, +0.101] on 9 classes and +0.042
+[-0.004, +0.089] on 3 groups. All arms point the same way and the best barely misses zero, so
+the benefit is probably real at around +0.03-0.04 — but 323 clean test trials cannot confirm
+it. **Do not claim the cleaning fixes the model.**
+
+### Review workflow (in progress)
+
+`PADDOCK_REVIEW_SENSITIVE.gpkg` — **1,973 distinct polygons**, not 3,222 trials, because the
+same paddock recurs across seasons (39 % less work). Layers `review` (polygons, editable
+`verdict`), `trials` (points, carrying the verdict for zoomed-out viewing), `manual_polygons`
+(digitise replacements here).
+
+Triage, calibrated on 36 hand-judged polygons, catches **17/17 bad at 2/19 false-flagged** —
+but only because the three failure modes each need a *different* signal:
+
+| mode | signal | flagged |
 |---|---|---|
-| **Canola** | **0.81** | precision 0.85, recall 0.77 |
-| Wheat | 0.68 | recall 0.81 but precision 0.59 — everything else falls into wheat |
-| Chickpea | 0.33 | |
-| Lupin / Field Pea / Faba Bean / Barley | 0.22-0.27 | |
-| Lentil | 0.07 | |
-| Oat | 0.00 | never predicted |
+| wrong paddock / trial site only | trial point >25 m outside its polygon | 192 |
+| whole region / multiple paddocks | area >300 ha | 222 |
+| overlapping paddock | different crop shares the polygon | 207 |
 
-**The single most useful number tonight: canola detected at a 5 % false-positive budget goes
-from 45.7 % (CFI threshold, three-group) to 77.0 % (model, same three indices).** A
-multivariate model over the whole seasonal shape is worth **+31 pp** over thresholding one
-index at one time. That is a strong signal that the modelling direction is right, and it was
-obtained without adding a single new band.
+**That 17/17 is in-sample** (three thresholds fitted to 36 points), which is why 150 unflagged
+polygons are sampled as `review_batch = validation`. Review those too — otherwise the 1,199
+"presumed OK" is an assumption with no evidence behind it.
 
-### Do the extra bands help? On the full data: NOT on their own
+**Methodological trap recorded, because it cost a wrong conclusion.** A first pass declared
+that no geometric rule could reproduce the verdicts, citing two polygons 0.1 ha apart at one
+site with opposite verdicts. That was wrong: only area and compactness had been tested, and
+the pair is separated cleanly by containment (0 m vs 137 m). The confusion came from
+`match_rule` reading `contains+upgraded_...`, where "contains" describes the polygon the point
+fell in *before* the upgrade moved the match. **All 259 upgraded matches have their trial point
+outside the polygon they ended up with**, and the upgrade searches to 150 m — far enough to
+cross a road into the next field. *"No rule can separate these" is only ever a statement about
+the features tried.*
 
-I extracted all 10 Sentinel-2 bands as paddock medians for every trial (91 jobs, ~38 CPU-hours
-— this had never been done; only 3 indices were ever stored, so no multi-band model was
-possible before tonight). Full-data result, same quality-filtered trials, same splits:
+## 4. Recommended next steps, in order
 
-| | 3 indices (n=2,477) | 10 bands (n=2,399) |
-|---|---|---|
-| temporal macro F1 | **0.316** | 0.301 |
-| spatial macro F1 | 0.273 | **0.304** |
-| canola F1 (temporal) | **0.81** | 0.74 |
-| canola @ 5 % FPR | **77.0 %** | 62.9 % |
+1. **Finish the review**, flagged and validation batches first. Everything downstream inherits
+   these labels, and the paper cannot claim GRDC ground truth while a third of the polygons are
+   contested. Re-run `build_review_package.py refresh` to push verdicts onto the points.
+2. **Re-run the 3-group model on the reviewed set** and compare against 0.716/0.707. With clean
+   labels the co-location experiment can finally be answered rather than left at "probably
+   +0.03-0.04".
+3. **Attack the Legume class** — F1 0.57, precision 0.51, i.e. cereals leak into it. This is
+   where the remaining headroom is; canola and cereal are both above 0.73.
+4. **Sentinel-1 backscatter** as the next feature, not more optical bands. It separates by
+   canopy structure, so it fails on different paddocks than CFI does — unlike the extra optical
+   bands, whose gains were indistinguishable from noise.
+5. **Then Presto.** Self-supervised pre-training is also the right way to use unlabelled
+   paddocks; thresholded pseudo-labels are not (`CANOLA_PSEUDO_LABELS.md`).
+6. **A canola-only 10 m map remains the fastest publishable output** — 0.76 F1 with honest
+   spatial CV on GRDC ground truth, against the two Australian papers' model-derived labels.
 
-**Correction to an earlier read in this session.** A preliminary run on 57 % of the data
-showed large minor-crop gains (lupin 0.27 -> 0.48, lentil 0.07 -> 0.25) and I wrote that the
-evidence favoured bands. **On the full data those gains vanished** — lentil went to 0.00 and
-lupin to 0.14, i.e. *worse* than the 3-index baseline. The partial-run gains were sample-size
-artefacts, exactly the caveat attached to them at the time. Ten bands alone do not beat three
-indices here, except on spatial transfer.
-
-**The likely reason, and it is a fixable methodology bug rather than a fact about bands.**
-CFI is non-linear in reflectance. The index files store the median of *per-pixel* CFI; a band
-file can only reconstruct CFI from the *median reflectance*, and those are not the same
-quantity. So the band model's CFI-equivalent is a degraded version of the one the index model
-gets for free — which fits the observation that the band model's biggest loss is precisely on
-canola, the class CFI carries.
-
-That predicts the two feature sets are complementary rather than competing, so a combined run
-(`SPECIES_MODEL_combined.md`, 325 features) is fitting now. **Read that before concluding
-anything about bands.** If combined beats both, the answer is "bands help, but only alongside
-properly-computed indices"; if it matches the 3-index model, the extra bands genuinely add
-little at paddock-median resolution and the next lever is Sentinel-1, not more optical bands.
-
-**Either way, don't give up on wheat-vs-other yet.** Two things are still untested and both
-are cheap: (a) per-pixel indices computed *before* aggregation for the full band set, and
-(b) the 274-feature model is probably overfitting 2,399 samples across 9 imbalanced classes —
-note that bands won on *spatial* transfer, which is the split less sensitive to that.
-
-## 3. Recommended next steps, in order
-
-1. **Read `SPECIES_MODEL_bands.md` first.** If full-data bands beat 0.316/0.273 macro F1 and
-   lift barley/oat, the feature story is settled and Presto becomes worth the effort. If they
-   only lift the pulses, the cereal problem needs something else (Sentinel-1 backscatter is
-   the obvious candidate — it separates cereals by structure, and the MDB study found it
-   useful).
-2. **Fix the class imbalance properly before chasing architecture.** Oat scores 0.00 with 112
-   samples against wheat's 835. Class-balanced weights are not enough. Worth trying before
-   any deep model, because it is free.
-3. **Then Presto.** The case for it is now concrete rather than aspirational: we have 3,439
-   labelled paddock time series across 9 crops with all 10 bands, which is exactly its input
-   format. Fine-tune rather than train from scratch given the sample size.
-4. **A canola-only 10 m map is already defensible** and is the fastest publishable output —
-   0.81 F1 with honest spatial CV, on GRDC ground truth rather than model-derived labels,
-   which is the edge over both Australian papers in the lit review. Do not wait for the
-   9-class model to work before shipping this.
-5. **Do not use the year x state panel structure as a QC signal.** Per section 1, weak panels
-   are mostly weak seasons, so dropping them would discard real agronomic variation and
-   optimistically bias any accuracy estimate.
-
-## 4. State of the data
-
-| artefact | location | scale |
-|---|---|---|
-| paddock-median 3 indices | `derived/samgeo/ts_v2/` | 3,439 trials, 9 crops |
-| **paddock-median 10 bands** | `derived/samgeo/bands_ts/` | 3,304+ trials (a few jobs outstanding) |
-| quality-filtered trial list | `derived/figures/crop_heatmaps/cfi_heatmap_ALL_rows_SENSITIVE.csv` | 2,477 |
-| heatmaps + GeoPackages | `derived/figures/crop_heatmaps/` | 40 panels |
-
-A handful of band-extraction jobs were still running at write-up. `extract_paddock.py` resumes
-by skipping TrialCodes already present, so re-running the same `qsub` lines tops up the gaps
-without redoing finished work. Total spend tonight ~200 SU (~2 % of the project earmark).
-
-## 5. When you wake up — exact commands
-
-The band model was still fitting when the window closed. It runs under `nohup` on the login
-node, so it survives the session; check it first:
-
-```bash
-cat output/SPECIES_MODEL_bands.md          # written when it finishes
-```
-
-It was trained on the 2,399 trials available at launch. Once the last extraction jobs land
-(check `qstat -u cb8590`), re-run it on the complete set — same command, ~10 min:
+## 5. Exact commands
 
 ```bash
 cd src/paddocks
 D=/scratch/xe2/cb8590/paddock-species-data/derived
-/g/data/xe2/John/geospatenv/bin/python train_species.py \
-    --bands "$D/samgeo/bands_ts/*_SENSITIVE.csv" \
-    --labeled $D/nvt_trials_labeled.csv \
-    --keep $D/figures/crop_heatmaps/cfi_heatmap_ALL_rows_SENSITIVE.csv \
-    --out ../../output/SPECIES_MODEL_bands.md
+PY=/g/data/xe2/John/geospatenv/bin/python
+
+# push review verdicts onto the points layer (safe, never touches `review`)
+$PY build_review_package.py refresh --out $D/figures/crop_heatmaps/PADDOCK_REVIEW_SENSITIVE.gpkg
+
+# turn verdicts into a training filter once enough are judged
+$PY build_review_package.py ingest --out $D/figures/crop_heatmaps/PADDOCK_REVIEW_SENSITIVE.gpkg \
+    --trials-out $D/reviewed_trials_SENSITIVE.csv
+
+# retrain (qsub, NOT the login node — see below)
+qsub train_group3.pbs
 ```
 
-Useful variants, both one-flag changes:
+**Never run the model scripts on a login node.** They are killed with no traceback, no
+"Killed", the log simply stops — read a silent disappearance as an external kill, not a bug.
+And size the job for `permutation_importance`, which dominates runtime and used to scale
+silently with ambient core count: the same run took ~10 min on a login node, over 90 min
+unfinished on 4 CPUs, and **75 seconds on 12 CPUs** with `--importance-repeats 5`.
 
-```bash
---with-geo          # adds lat/lon/year: the map-product number, NOT evidence about imagery
---model rf          # random forest instead of gradient boosting, as a robustness check
-```
+## 6. State of the data
 
-To top up any missing band extractions (safe to re-run; finished trials are skipped):
-
-```bash
-for f in $D/samgeo/bands_ts/chunks/A_*.csv $D/samgeo/bands_ts/chunks/AR_*.csv; do
-    qsub -v SITES=$f,POLYDIR=$D/samgeo/full,\
-OUT=$D/samgeo/bands_ts/$(basename $f .csv)_SENSITIVE.csv,EXTRA_ARGS=--all-bands \
-        extract_paddock.pbs
-done
-```
-(and the same with `B_*.csv` against `POLYDIR=$D/samgeo/other`).
+| artefact | location | scale |
+|---|---|---|
+| paddock-median 3 indices | `derived/samgeo/ts_v2/` | 3,439 trials, 9 crops |
+| paddock-median 10 bands | `derived/samgeo/bands_ts/` | 3,304+ trials |
+| review package | `derived/figures/crop_heatmaps/PADDOCK_REVIEW_SENSITIVE.gpkg` | 1,973 polygons |
+| NDWI composites by TrialCode | `derived/samgeo/by_trial/<TrialCode>_ndwi.tif` | 4,191 symlinks |
+| conflict flags | `derived/paddock_conflicts_SENSITIVE.csv` | 2,477 trials |
+| seed verdicts | `derived/seed_verdicts_SENSITIVE.csv` | 36 judged |
