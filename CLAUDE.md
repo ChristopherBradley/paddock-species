@@ -42,9 +42,13 @@ The repo is structured so transfers are mechanical (see `sync/README.md`):
 
 The GRDC trial site dataset (lat/lon, crop type, planting/harvest dates, yield) is covered by a signed NDA. **Never commit this data, or any derived file that exposes site-level records, to git.** Add any new sensitive data paths to `.gitignore` before they are written to disk.
 
-## Never Commit on the User's Behalf
+## Committing
 
-The user reviews all generated code personally and makes every commit themselves. **Do not run `git commit` (or stage files in preparation for one) unless the user explicitly asks for that specific commit in the moment.** Leave changes unstaged for their review instead.
+Committing on the user's behalf is fine. **The hard constraint is that no commit may contain
+GRDC/NVT sensitive data** (TrialCodes, site coordinates, yields, or any site-level record) —
+see the Sensitive Data section above. Before every commit, check what is being staged: any
+file matching `**/*SENSITIVE*` is gitignored and must stay that way, and no tracked file may
+contain a TrialCode. Do not `git push` without the user asking.
 
 ## Local Environment
 
@@ -90,3 +94,12 @@ Never let the entity that wrote a section (idea, proposal, code, manuscript text
 2. Read `handoff.json` if present, for pipeline stage and resume instructions.
 3. Read `memory/MEMORY.md` for prior pipeline state.
 4. Read `BRIEF.md` (or `RESEARCH_PLAN.md` if it exists) for the authoritative research brief.
+
+## Where reports go
+
+Write markdown reports into **`output/` in this repo** (not `/scratch`) — the user has VSCode
+open here and reads them directly. Anything containing TrialCodes, coordinates or other
+site-level records must be named `*_SENSITIVE.md` / `*_SENSITIVE.csv`, which `.gitignore`
+catches via the `**/*SENSITIVE*` rule, so it is readable in the editor but can never be
+committed. Aggregate-only reports (no site-level records) can use a plain name and be
+committed normally.

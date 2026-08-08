@@ -1,0 +1,42 @@
+#!/bin/bash
+#PBS -N model_uncertainty
+#PBS -P xe2
+#PBS -q normal
+#PBS -l ncpus=4
+#PBS -l mem=16GB
+#PBS -l walltime=02:00:00
+#PBS -l storage=gdata/xe2+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+
+# Bootstrap CIs on the species-model comparisons.
+#
+# THIS MUST NOT RUN ON A LOGIN NODE. The first attempt did, and was killed without a
+# traceback partway through the spatial folds: 21 boosted fits at 8 threads accumulates CPU
+# time several times faster than wall-clock and trips gadi's login-node limit. The symptom is
+# a process that simply disappears — no error, no exit message — which is easy to misread as
+# a crash in the script. Unlike the extraction jobs this is compute-bound, not I/O-bound, so
+# the usual "1 CPU / 4 GB is cheapest" rule does not apply here; 4 CPUs is billed the same as
+# 16 GB of memory under `max(ncpus, mem/4GB)` and the threads are actually used.
+#
+# ~4 SU. Fits are cached to $CACHE, so re-running to refine the report costs seconds.
+
+set -euo pipefail
+
+export PROJ_NETWORK=OFF
+export OMP_NUM_THREADS=4
+PY=/g/data/xe2/John/geospatenv/bin/python
+D=/scratch/xe2/cb8590/paddock-species-data/derived
+REPO=/home/147/cb8590/Projects/paddock-species
+
+cd $REPO/src/paddocks
+$PY model_uncertainty.py \
+    --bands "$D/samgeo/bands_ts/*_SENSITIVE.csv" \
+    --indices "$D/samgeo/ts_v2/*_SENSITIVE.csv" \
+    --labeled $D/nvt_trials_labeled.csv \
+    --keep $D/figures/crop_heatmaps/cfi_heatmap_ALL_rows_SENSITIVE.csv \
+    --out $REPO/output/MODEL_UNCERTAINTY.md \
+    --cache $D/model_uncertainty_fits.npz \
+    --seeds 2 --boot 2000
+echo "Done model_uncertainty"

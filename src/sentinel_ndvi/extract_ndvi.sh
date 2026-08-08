@@ -2,14 +2,16 @@
 # Submit PBS jobs to extract one chunk each, capped at LANES running concurrently.
 #   ./extract_ndvi.sh [--force] [--lanes N] [CHUNK_DIR]
 #
-# CONCURRENCY IS NOT A TUNING KNOB — it is a correctness constraint.
-# Every job holds an open connection to the SHARED DEA index database (pgbouncer on
-# dea-db.nci.org.au:6432) for its whole run. On 2026-08-06 a fan-out of 17 simultaneous
-# jobs exhausted that pool: all 17 blocked forever mid-chunk, a login-node
-# `dc.list_products()` also hung, and 16 jobs were killed at the 4 h walltime having done
-# almost nothing (~136 SU for 130/1630 trials). One job alone had been running fine. The
-# pool recovered the moment the jobs were killed. This is shared infrastructure — other
-# NCI users were affected too. Raise LANES only with evidence the pool can take it.
+# LANES defaults to 4 by the user's standing instruction, NOT because concurrency is unsafe.
+#
+# CORRECTION (2026-08-07): an earlier version of this comment blamed the 2026-08-06 mass
+# hang on exhausting the shared DEA index pool. That was a MISDIAGNOSIS. The real cause was
+# `module load dea/20231204` exporting PROJ_NETWORK=ON, so PROJ tried to fetch datum grids
+# from cdn.proj.org — and compute nodes have no outbound internet, so it retried forever at
+# ~0 % CPU until walltime. The database was never involved; the recovery merely coincided
+# with killing the jobs. Fixed by `export PROJ_NETWORK=OFF` after the module load.
+# Corroborating evidence: the user routinely fans out ~200 concurrent jobs against the same
+# index without trouble. So raising LANES is a cost/throughput decision, not a safety one.
 #
 # Jobs within a lane are chained with `-W depend=afterany`, so exactly LANES run at once
 # ('afterany', not 'afterok', so one bad chunk does not strand the rest of its lane).
