@@ -60,7 +60,7 @@ contain a TrialCode. Do not `git push` without the user asking.
 - gpu: remote
 - Access: NCI gadi, projects `v10` and `ka08` (direct access to the DEA — Digital Earth Australia — datacube).
 - Scheduling: PBS job queue (not a persistent SSH session) — deploy via qsub-style PBS scripts, not `ssh <server> <command>`.
-- Allocation: user's group has ~200 KSU/quarter; up to 10 KSU earmarked for this project. Always benchmark job configurations (memory/CPU/walltime) before scaling up — see SU-minimization note below.
+- Allocation: user's group has ~200 KSU/quarter; up to 50 KSU earmarked for this project. Always benchmark job configurations (memory/CPU/walltime) before scaling up — see SU-minimization note below.
 - Alternative launch path: user can relaunch a session directly on gadi via VSCode remote instead of SSH-ing from local.
 - Reference PBS scripts (from a related prior project, same user): https://github.com/ChristopherBradley/shelterbelts/blob/main/pbs_scripts — `sentinel.sh`/`sentinel.pbs` (Sentinel download via DEA datacube), `predictions.sh`/`predictions.pbs` (run predictions). Build an analogous PBS setup for crop-type prediction in this project.
 - SU-minimization note: prior experience found many small jobs (4GB RAM, 1 CPU, 10+ hour walltime, using `os.Popen`/subprocess to avoid memory accumulation) used fewer SUs than fewer large-memory/large-CPU jobs. Treat as a starting hypothesis to re-benchmark for this workload, not a fixed rule.

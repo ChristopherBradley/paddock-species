@@ -59,6 +59,47 @@ GROUP = {"Canola": "Canola", "Wheat": "Cereal", "Barley": "Cereal", "Oat": "Cere
          "Lentil": "Legume", "Lupin": "Legume"}
 
 
+def add_flags(R, min_ha=3.0, max_ha=300.0, max_dist_m=25.0):
+    """Triage flags. Shared by `build` and `finalise` so the two can never drift apart.
+
+    THE CONFLICT FLAG COUNTS GROUPS, NOT SPECIES. It used to fire on `n_crops > 1`, which is
+    the right test for a nine-species target and the wrong one for the three-group target this
+    project now predicts. A polygon carrying a lentil trial and a field pea trial is a
+    segmentation failure only if you need to tell lentil from field pea; both are Legume, so
+    the paddock median is a legitimate Legume sample and the "conflict" is an artefact of the
+    label granularity, not of the geometry. Counting groups rescues 157 of the 207 flagged
+    polygons (406 trials) — 99 all-Legume, 23 all-Cereal, 35 of which stay out anyway on a
+    size or containment flag. What remains is 50 polygons where a canola and a cereal, or a
+    cereal and a legume, genuinely share one paddock median under contradictory labels; those
+    are unusable at any granularity and keep the flag under its honest name, `group_conflict`.
+
+    Every one of the 207 is a SAME-YEAR conflict, checked rather than assumed — no flag here
+    comes from ordinary crop rotation putting different crops on one paddock in different
+    seasons, which would have been a false positive worth fixing separately.
+
+    KNOWN DISCREPANCY, `min_ha`. The package the reviewer actually worked through was written
+    when this cut was 2 ha; the script was later raised to 3 and never rebuilt, so 26 polygons
+    in the 2-3 ha band (40 trials, 21 of them in the `unflagged` pile the reviewer signed off)
+    were shown as unflagged and are dropped by the current default. The 3 ha justification on
+    record is a 2.8 ha trial-site-only polygon, but no verdict in `seed_verdicts` or the review
+    layer corresponds to it — the smallest judged-bad polygons are 1.4 and 1.7 ha, both under
+    either cut. So the default stays at the more conservative 3 (2-3 ha is below a broadacre
+    paddock and is where a trial site with its surround missed would land), the cost is stated
+    rather than absorbed, and `--min-ha 2` reverts to exactly what the reviewer saw. It is
+    1.4 % of the usable trials either way.
+    """
+    R = R.copy()
+    R["conflict"] = R.n_groups > 1
+    R["triage_flag"] = ((R.dist_m > max_dist_m) | (R.paddock_ha < min_ha)
+                        | (R.paddock_ha > max_ha) | R.conflict)
+    R["flag_reason"] = (
+        pd.Series(np.where(R.dist_m > max_dist_m, "point_outside;", ""), index=R.index)
+        + np.where(R.paddock_ha < min_ha, "too_small;", "")
+        + np.where(R.paddock_ha > max_ha, "too_big;", "")
+        + np.where(R.conflict, "group_conflict;", ""))
+    return R
+
+
 def build(args):
     g = gpd.read_file(args.chosen_gpkg, layer="chosen").to_crs("EPSG:3577")
     g["poly_id"] = [hashlib.md5(w).hexdigest()[:12] for w in g.geometry.to_wkb()]
@@ -115,17 +156,7 @@ def build(args):
         R["ndwi_tif"] = R.poly_id.map(first).map(t2.ndwi).fillna("")
         R["filt_gpkg"] = R.poly_id.map(first).map(t2.filt).fillna("")
 
-    R["conflict"] = R.n_crops > 1
-    # 3 ha, not 2: the one polygon the validation batch caught as bad (a trial site with the
-    # surrounding paddock missed) is 2.8 ha, so a 2 ha cut let it through. 3 ha catches it for
-    # +40 polygons of extra review — cheap insurance given the mode it represents.
-    R["triage_flag"] = ((R.dist_m > 25) | (R.paddock_ha < 3)
-                        | (R.paddock_ha > 300) | R.conflict)
-    R["flag_reason"] = (
-        pd.Series(np.where(R.dist_m > 25, "point_outside;", ""), index=R.index)
-        + np.where(R.paddock_ha < 3, "too_small;", "")
-        + np.where(R.paddock_ha > 300, "too_big;", "")
-        + np.where(R.conflict, "crop_conflict;", ""))
+    R = add_flags(R)
     R["verdict"] = ""
     R["reason"] = ""
 
@@ -190,7 +221,7 @@ def build(args):
           f"({100*(1-len(R)/len(g)):.0f}% less work than per-trial)")
     print(f"  pre-filled from your verdicts: {n_seed}")
     print(f"  triage-flagged (review first): {int(R.triage_flag.sum())}")
-    for reason in ["point_outside", "too_small", "too_big", "crop_conflict"]:
+    for reason in ["point_outside", "too_small", "too_big", "group_conflict"]:
         print(f"      {reason:14s} {int(R.flag_reason.str.contains(reason).sum()):5d}")
     print(f"  validation sample (unflagged) : "
           f"{int((R.review_batch=='validation').sum())}")
@@ -228,6 +259,71 @@ def refresh(args):
     print(f"  {T.verdict.value_counts().to_dict()}")
 
 
+def finalise(args):
+    """Turn the reviewer's batch-level rulings into a per-polygon verdict for every row.
+
+    The reviewer did not judge 1,973 polygons one at a time, and did not need to. They judged
+    the BATCHES, having sampled each:
+
+      * all 150 `validation` polygons -> good, so the 1,199 `unflagged` are taken as good too.
+        That is the whole reason the validation batch exists; without it the "presumed OK"
+        pile would still be an assumption.
+      * ~10 of each flagged category, all bad -> every remaining `flagged` polygon is dropped.
+
+    So this fills `verdict` from `review_batch`, with two things overriding it:
+
+      1. **Explicit per-polygon verdicts win.** The 36 hand-judged seeds are specific evidence
+         and the batch rule is general; where they disagree the specific one holds. It matters
+         in exactly one direction here — 2 seed-GOOD polygons are triage-flagged (the known
+         2/19 false-flag rate), and blanket-dropping them would discard a judgement the
+         reviewer actually made. No seed-bad polygon is unflagged.
+      2. **Flags are recomputed first**, so the group-vs-species conflict fix in `add_flags`
+         reaches polygons that were flagged under the old species rule.
+
+    Nothing is inferred about a polygon the reviewer never had a chance to see: `unflagged` is
+    good only because `validation` was drawn at random from it and came back clean.
+    """
+    R = gpd.read_file(args.out, layer="review")
+    R["verdict"] = R.verdict.fillna("")
+    R["reason"] = R.reason.fillna("")
+    before = R.flag_reason.fillna("")
+    R = add_flags(R, min_ha=args.min_ha, max_ha=args.max_ha, max_dist_m=args.max_dist_m)
+    moved = int((before != R.flag_reason).sum())
+
+    seeded = R.verdict.isin(["good", "bad", "redraw"])
+    # A polygon whose flag has just been lifted is no longer "flagged" for the batch rule,
+    # whatever `review_batch` was written at build time.
+    batch = np.where(R.triage_flag, "flagged", R.review_batch.replace({"flagged": "unflagged"}))
+    R["review_batch"] = batch
+    policy_bad = R.triage_flag & ~seeded
+    policy_good = ~R.triage_flag & ~seeded
+    R.loc[policy_bad, "verdict"] = "bad"
+    R.loc[policy_bad, "reason"] = "batch rule: flagged " + R.loc[policy_bad, "flag_reason"]
+    R.loc[policy_good, "verdict"] = "good"
+    R.loc[policy_good, "reason"] = np.where(
+        R.loc[policy_good, "review_batch"].eq("validation"),
+        "batch rule: validation sample, reviewed",
+        "batch rule: unflagged, covered by the validation sample")
+
+    R.to_file(args.out, layer="review", driver="GPKG")
+    print(f"{len(R)} polygons finalised  ({moved} had their flag_reason rewritten by the "
+          f"group-conflict fix)")
+    print(f"  kept explicit reviewer verdicts : {int(seeded.sum())}")
+    print(f"  good : {int(R.verdict.eq('good').sum())} polygons, "
+          f"{int(R.loc[R.verdict.eq('good'), 'n_trials'].sum())} trials")
+    print(f"  bad  : {int(R.verdict.eq('bad').sum())} polygons, "
+          f"{int(R.loc[R.verdict.eq('bad'), 'n_trials'].sum())} trials")
+    print("  dropped by reason:")
+    for reason in ["point_outside", "too_small", "too_big", "group_conflict"]:
+        m = R.verdict.eq("bad") & R.flag_reason.str.contains(reason)
+        print(f"      {reason:15s} {int(m.sum()):5d} polygons, "
+              f"{int(R.loc[m, 'n_trials'].sum()):5d} trials")
+    args_refresh = argparse.Namespace(out=args.out)
+    refresh(args_refresh)
+    if args.trials_out:
+        ingest(args)
+
+
 def ingest(args):
     R = gpd.read_file(args.out, layer="review")
     done = R[R.verdict.isin(["good", "bad", "redraw"])]
@@ -255,9 +351,11 @@ def ingest(args):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=["build", "refresh", "ingest"],
+    ap.add_argument("mode", choices=["build", "refresh", "finalise", "ingest"],
                     help="build: create the package (OVERWRITES, discarding any review edits). "
                          "refresh: copy verdicts onto the trials layer, edits preserved. "
+                         "finalise: recompute flags, fill verdicts from the reviewer's "
+                         "batch-level rulings, then refresh + ingest. "
                          "ingest: turn verdicts into a training filter.")
     ap.add_argument("--chosen-gpkg")
     ap.add_argument("--out", required=True)
@@ -266,11 +364,18 @@ def main():
     ap.add_argument("--tif-csv", help="trial_to_tif csv from link_tifs_by_trial.py")
     ap.add_argument("--validation-n", type=int, default=150,
                     help="unflagged polygons to sample for measuring the triage miss rate")
+    ap.add_argument("--min-ha", type=float, default=3.0,
+                    help="below this a polygon is too_small (the reviewed package was built "
+                         "at 2.0; see add_flags)")
+    ap.add_argument("--max-ha", type=float, default=300.0)
+    ap.add_argument("--max-dist-m", type=float, default=25.0)
     args = ap.parse_args()
     if args.mode == "build":
         build(args)
     elif args.mode == "refresh":
         refresh(args)
+    elif args.mode == "finalise":
+        finalise(args)
     else:
         ingest(args)
 

@@ -60,14 +60,84 @@ def aoi_paths(outdir, stub):
 
 
 def log_timing(outdir, stage, row):
-    """Append one row per AOI so a walltime kill still leaves benchmark data behind."""
-    path = os.path.join(outdir, f"timings_{stage}.csv")
+    """Append one row per AOI so a walltime kill still leaves benchmark data behind.
+
+    ONE FILE PER JOB, NOT ONE FILE PER STAGE. Every job of a stage writes concurrently to the
+    same directory, and an append from a separate process is only atomic below the pipe buffer.
+    Sharing one file corrupted `timings_segment.csv` on the 2026-08-25 Riverina run: six GPU
+    jobs interleaved mid-line and produced rows like `6.56.46.52.9...`.
+
+    It is a telemetry bug, not a data one, and it is partial — 909 of 910 parsed rows survived,
+    because most writes do land atomically. But the failure is silent and it grows with the
+    number of concurrent writers, so at national scale (100,000 tiles, many more jobs) the
+    benchmark this file exists to support would quietly stop being trustworthy. The
+    segmentation outputs were never at risk: every tile writes its own GeoPackage.
+
+    The job id keeps the writers apart; read a stage back with a glob."""
+    job = os.environ.get("PBS_JOBID", str(os.getpid())).split(".")[0]
+    path = os.path.join(outdir, f"timings_{stage}_{job}.csv")
     new = not os.path.exists(path)
     with open(path, "a", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=list(row))
         if new:
             w.writeheader()
         w.writerow(row)
+
+
+# ONE DATACUBE CONNECTION PER PROCESS, NOT PER TILE.
+#
+# This used to be `datacube.Datacube(...)` inside build_image, i.e. a fresh Postgres connection
+# for every AOI — 310 open/close cycles per job. With 320 jobs on the continent that exhausted
+# the DEA connection pooler outright:
+#
+#     psycopg2.OperationalError: FATAL: no more connections allowed (max_client_conn)
+#
+# and because each AOI is wrapped in `except Exception`, every one of those failures printed
+# FAILED and moved on while the JOB still exited 0. Measured on the first national attempt:
+# **79 % of tiles failed and PBS reported success on every chunk.** The composites simply were
+# not there, and nothing downstream would have noticed until the map had holes.
+#
+# The pool is shared with every other DEA user on gadi, so the fix is both correctness and
+# courtesy: hold one connection for the life of the process, and back off rather than hammer
+# when the pooler is full.
+_DC = None
+
+
+def _datacube():
+    global _DC
+    if _DC is None:
+        import datacube
+        _DC = datacube.Datacube(app="samgeo_presegment")
+    return _DC
+
+
+def _is_transient(e):
+    """Pool exhaustion and dropped connections are worth waiting for; a bad AOI is not."""
+    m = str(e).lower()
+    return any(k in m for k in ("max_client_conn", "no more connections", "too many clients",
+                                "connection reset", "server closed the connection",
+                                "could not connect", "operationalerror", "timeout expired"))
+
+
+def with_retry(fn, *a, tries=6, base=20.0, **kw):
+    """Retry `fn` on transient datacube/database errors with exponential backoff + jitter.
+
+    Backoff is jittered because the failure is CORRELATED across jobs — the pooler fills when
+    everyone queries at once, so a fixed sleep would send the whole fleet back in lockstep and
+    refill it instantly. 20 s doubling to ~10 min covers a pooler that is full because of a
+    burst; anything longer than that is a real outage and should surface as a failure.
+    """
+    import random
+    for i in range(tries):
+        try:
+            return fn(*a, **kw)
+        except Exception as e:
+            if i == tries - 1 or not _is_transient(e):
+                raise
+            wait = base * (2 ** i) * (0.5 + random.random())
+            print(f"  transient datacube error ({type(e).__name__}), "
+                  f"retry {i + 1}/{tries - 1} in {wait:.0f}s", flush=True)
+            time.sleep(wait)
 
 
 def build_image(lat, lon, half_m, start, end, out_tif, resolution=10):
@@ -78,7 +148,7 @@ def build_image(lat, lon, half_m, start, end, out_tif, resolution=10):
     from datacube.utils import geometry
     from rasterio.transform import from_bounds
 
-    dc = datacube.Datacube(app="samgeo_presegment")
+    dc = _datacube()
     # Query in Albers metres so the AOI is a true square of known size, rather than a
     # degree box whose ground width changes with latitude.
     pt = geometry.point(lon, lat, geometry.CRS("EPSG:4326")).to_crs(geometry.CRS("EPSG:3577"))
@@ -175,8 +245,9 @@ def do_presegment(args):
             continue
         t = time.time()
         try:
-            n_scenes, shape = build_image(float(a["lat"]), float(a["lon"]), float(a["half_m"]),
-                                          a["start"], a["end"], p["tif"])
+            n_scenes, shape = with_retry(
+                build_image, float(a["lat"]), float(a["lon"]), float(a["half_m"]),
+                a["start"], a["end"], p["tif"])
         except Exception as e:                      # one bad AOI must not kill the batch
             print(f"FAILED {a['stub']}: {e}", flush=True)
             log_timing(args.outdir, "presegment",
@@ -193,6 +264,21 @@ def do_presegment(args):
         done += 1
     print(f"presegment: {done} built, {skipped} skipped, {failed} failed")
 
+    # EXIT NON-ZERO ON A SYSTEMIC FAILURE. Wrapping each AOI in try/except is right for one bad
+    # tile and wrong for a shared service falling over: on the first national submission every
+    # job exited 0 with 84 % of its tiles FAILED, and nothing downstream could tell. The queue
+    # said success, the composites were not there, and the map would have had holes.
+    #
+    # A few per cent of failures is normal (an AOI with no Sentinel-2 coverage, a corrupt scene).
+    # Above `--max-fail-frac` it is not a tile problem, it is a run problem, and the job must say
+    # so where PBS can see it.
+    attempted = done + failed
+    if attempted and failed / attempted > args.max_fail_frac:
+        raise SystemExit(
+            f"ABORT: {failed}/{attempted} AOIs failed ({100 * failed / attempted:.0f} %), above "
+            f"--max-fail-frac {args.max_fail_frac:.0%}. This is a systemic fault, not bad tiles "
+            f"— check for datacube connection errors and re-submit with fewer concurrent jobs.")
+
 
 def do_segment(args):
     os.makedirs(args.outdir, exist_ok=True)
@@ -201,9 +287,31 @@ def do_segment(args):
             if os.path.exists(aoi_paths(args.outdir, a["stub"])["tif"])
             and (args.force or not os.path.exists(aoi_paths(args.outdir, a["stub"])["filt"]))]
     missing = [a for a in aois if not os.path.exists(aoi_paths(args.outdir, a["stub"])["tif"])]
+
+    # A MISSING INPUT IS NOT A WARNING. This used to print one line and carry on, and that is
+    # how the national run grew a Victoria-shaped hole: 56 chunks never ran presegment (they
+    # were system-held over the 200-job queue ceiling and reaped), so this stage saw 310 of 310
+    # composites absent, printed the warning, said "nothing to segment" and exited 0. PBS
+    # recorded success, predict then ran over the same empty ground and also exited 0, and the
+    # first sign of trouble would have been missing paddocks in a national map.
+    #
+    # The per-AOI try/except below is the right shape for one corrupt scene. It is the wrong
+    # shape for "the stage that feeds me never ran", because that is not a property of any tile
+    # — so it is checked once, up front, against the count that was ASKED for. Exit 0 has to
+    # mean the work was done, not merely that nothing raised.
     if missing:
-        print(f"WARNING: {len(missing)} AOIs have no pre-segment .tif — run presegment first")
+        frac = len(missing) / len(aois)
+        print(f"WARNING: {len(missing)}/{len(aois)} AOIs have no pre-segment .tif "
+              f"({frac:.0%})", flush=True)
+        if frac > args.max_missing_frac:
+            raise SystemExit(
+                f"ABORT: {len(missing)}/{len(aois)} AOIs ({frac:.0%}) have no composite, above "
+                f"--max-missing-frac {args.max_missing_frac:.0%}. Pre-segment did not run for "
+                f"this list — check for system-held ({{Hold_Types = s}}) or reaped jobs and "
+                f"re-submit with `run_national.sh repair` before segmenting.")
     if not todo:
+        # Reached only when the missing fraction is small enough to tolerate, so every AOI that
+        # HAS a composite already has its polygons. That is genuinely nothing to do.
         print("nothing to segment")
         return
 
@@ -315,12 +423,24 @@ def main():
     p1.add_argument("--aois", required=True)
     p1.add_argument("--outdir", required=True)
     p1.add_argument("--force", action="store_true")
+    p1.add_argument("--max-fail-frac", type=float, default=0.10,
+                    help="abort the job (non-zero exit) if more than this fraction of AOIs fail. "
+                         "A per-AOI try/except cannot tell a bad tile from a shared service that "
+                         "has fallen over, and the first national submission exited 0 on every "
+                         "chunk with 84 %% of tiles failed. This is the job-level check that "
+                         "makes a systemic fault visible to PBS.")
     p1.set_defaults(func=do_presegment)
 
     p2 = sub.add_parser("segment", help="stage 2: SAM over many AOIs, one model load")
     p2.add_argument("--aois", required=True)
     p2.add_argument("--outdir", required=True)
     p2.add_argument("--force", action="store_true")
+    p2.add_argument("--max-missing-frac", type=float, default=0.10,
+                    help="abort the job (non-zero exit) if more than this fraction of AOIs have "
+                         "no pre-segment composite. Distinct from --max-fail-frac: that catches "
+                         "a stage failing on its own items, this catches the stage BEFORE it "
+                         "never having run. 56 chunks of the first national run were reaped off "
+                         "the queue unstarted, and SAM reported success on every one of them.")
     add_filter_args(p2)
     p2.set_defaults(func=do_segment)
 

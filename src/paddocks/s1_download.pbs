@@ -1,0 +1,32 @@
+#!/bin/bash
+#PBS -N s1_download
+#PBS -P xe2
+#PBS -q copyq
+#PBS -l ncpus=1
+#PBS -l mem=8GB
+#PBS -l walltime=08:00:00
+#PBS -l storage=gdata/xe2+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+
+# copyq, because gadi's `normal` compute nodes have no outbound internet and MPC is on the
+# public web. 1 CPU is right: this is network-bound (~14 s per AOI-season, nearly all
+# transfer), so extra cores would be billed while idle.
+#
+# Submit as N striding shards (-v SHARD=i/N) rather than one long job: 1,157 AOIs is ~4.6 h
+# serial, and copyq's walltime ceiling leaves no room for a slow tail. Shards share no state —
+# each writes its own AOI files and skips what already exists, so a re-submit resumes.
+#
+# AOI LIST IS RESTRICTED TO PADDOCKS THAT SURVIVED THE REVIEW: 1,157 of 1,900 AOIs serve at
+# least one reviewed-good trial, so the other 743 would be downloaded for rows the model will
+# never see.
+set -euo pipefail
+PY=/g/data/xe2/John/geospatenv/bin/python
+D=/scratch/xe2/cb8590/paddock-species-data/derived
+cd /home/147/cb8590/Projects/paddock-species/src/paddocks
+$PY s1_download.py \
+    --aois $D/samgeo/aois_reviewed_SENSITIVE.csv \
+    --outdir $D/s1 \
+    --shard ${SHARD:-0/1} ${LIMIT:+--limit $LIMIT}
+echo "Done s1_download shard ${SHARD:-0/1}"

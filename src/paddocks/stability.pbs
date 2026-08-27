@@ -1,0 +1,37 @@
+#!/bin/bash
+#PBS -N stability
+#PBS -P xe2
+#PBS -q normal
+#PBS -l ncpus=1
+#PBS -l mem=4GB
+#PBS -l walltime=02:00:00
+#PBS -l storage=gdata/xe2+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+
+# Year-to-year polygon stability. Pure geometry — no datacube, no GPU, no network.
+#
+# THE COST IS READING GEOPACKAGES, NOT COMPUTING IoU. Measured 2026-08-25: opening one
+# `_filt.gpkg` through fiona costs ~1.2-2.7 s (the environment has no pyogrio), while matching a
+# whole year-pair of ~25 polygons costs 0.3 s. So over 10,404 segmentations the job is ~9
+# CPU-hours of file opening and a few minutes of geometry.
+#
+# That is why this shards. Each tile is independent — polygons are only ever compared against
+# other years of the SAME 3 km square — so N jobs produce exactly the result one job would, in
+# 1/N of the wall time and for the same ~18 SU. Do NOT try to speed up the geometry; it is not
+# where the time goes.
+
+set -euo pipefail
+: "${POLYDIR:?set -v POLYDIR=}"
+: "${OUT:?set -v OUT=}"
+: "${SHARD:?set -v SHARD=I/N}"
+
+export PROJ_NETWORK=OFF
+PY=/g/data/xe2/John/geospatenv/bin/python
+cd /home/147/cb8590/Projects/paddock-species/src/paddocks
+
+echo "stability POLYDIR=$POLYDIR SHARD=$SHARD"
+$PY polygon_stability.py --polydir "$POLYDIR" --shard "$SHARD" --out "$OUT" \
+    --report /dev/null ${EXTRA_ARGS:-}
+echo "Done stability"

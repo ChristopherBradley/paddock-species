@@ -1,0 +1,48 @@
+#!/bin/bash
+#PBS -N merge_nat
+#PBS -P xe2
+#PBS -q normal
+#PBS -l ncpus=1
+#PBS -l mem=8GB
+#PBS -l walltime=05:00:00
+#PBS -l storage=gdata/xe2+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+
+# Fold ~320 per-chunk prediction GeoPackages into the one national file.
+#
+# WHY ogr2ogr AND NOT geopandas. The national year is ~2.4 M polygons. Reading that through
+# fiona and concatenating in pandas would need tens of GB and hours; ogr2ogr streams feature by
+# feature at near-constant memory. The environment has no pyogrio and no osgeo bindings, but the
+# system GDAL module ships the CLI, which is all this needs.
+#
+# WHY THE SPATIAL INDEX IS BUILT LAST. GeoPackage maintains an R-tree with a trigger on every
+# INSERT, so building it incrementally over 2.4 M appended features costs far more than building
+# it once at the end. Created with SPATIAL_INDEX=NO, then one CreateSpatialIndex call. QGIS is
+# unusable on a file this size without it, so it is not optional.
+
+set -euo pipefail
+: "${M:?set -v M=}"
+module load gdal/3.7.3
+
+OUT=$M/national_2024_crops.gpkg
+rm -f "$OUT"
+n=0
+for f in $M/pred/p*.gpkg; do
+    [ -s "$f" ] || continue
+    if [ $n -eq 0 ]; then
+        ogr2ogr -f GPKG "$OUT" "$f" -nln crops -lco SPATIAL_INDEX=NO
+    else
+        ogr2ogr -f GPKG -append -update "$OUT" "$f" -nln crops
+    fi
+    n=$((n + 1))
+    [ $((n % 25)) -eq 0 ] && echo "merged $n chunks"
+done
+echo "merged $n chunks"
+
+echo "building spatial index"
+ogrinfo "$OUT" -sql "SELECT CreateSpatialIndex('crops','geom')" >/dev/null
+ogrinfo -so "$OUT" crops | head -20
+ls -la "$OUT"
+echo "Done merge"

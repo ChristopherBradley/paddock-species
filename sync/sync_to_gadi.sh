@@ -7,6 +7,9 @@
 #   ./sync/sync_to_gadi.sh skills    # ~/.claude/skills -> gadi ~/.claude/skills
 #   ./sync/sync_to_gadi.sh all      # code + data + skills
 #   ./sync/sync_to_gadi.sh pull     # gadi derived outputs -> local data/derived  (pull back)
+#   ./sync/sync_to_gadi.sh pull-figures  # ONLY derived/figures -> local (quick visual check, ~2MB)
+#   ./sync/sync_to_gadi.sh pull-code     # gadi /home code/docs -> local repo (reverse of `code`)
+#                                         # PULL_DELETE=1 also removes local files gadi no longer has
 #
 # Mapping (single source of truth for the home/gdata/scratch split):
 #   repo root (minus data/, Papers/, extra papers/)  <->  /home/147/cb8590/Projects/paddock-species
@@ -41,12 +44,27 @@ CODE_EXCLUDES=(
   --exclude '.git/' --exclude '__pycache__/' --exclude '*.pyc'
   --exclude '.DS_Store' --exclude '.ipynb_checkpoints/'
   --exclude 'data/derived/'   # sensitive; travels with `data`, never to /home
+  # local-only scratch dirs (gitignored, rsync does NOT read .gitignore -- must list explicitly)
+  --exclude 'examples/' --exclude 'outdir/'
+  # never let a Snowflake/API password leave this machine, wherever it lives in the tree
+  --exclude 'credentials.py'
 )
 
 sync_code() {
   echo ">> code  ->  ${LOGIN}:${HOME_DST}"
   ssh "${USER_REMOTE}@${LOGIN}" "mkdir -p '${HOME_DST}'"
   "${RSYNC[@]}" "${CODE_EXCLUDES[@]}" "${REPO}/" "${USER_REMOTE}@${LOGIN}:${HOME_DST}/"
+}
+
+pull_code() {
+  local extra=()
+  if [ "${PULL_DELETE:-0}" = "1" ]; then
+    echo ">> PULL_DELETE=1: local files gadi no longer has WILL be removed"
+    extra+=(--delete)
+  fi
+  echo "<< pull  ${LOGIN}:${HOME_DST}  ->  ${REPO}  (code/docs; local .git untouched)"
+  "${RSYNC[@]}" ${extra[@]+"${extra[@]}"} "${CODE_EXCLUDES[@]}" \
+    "${USER_REMOTE}@${LOGIN}:${HOME_DST}/" "${REPO}/"
 }
 
 sync_data() {
@@ -79,12 +97,20 @@ pull_outputs() {
   "${RSYNC[@]}" "${USER_REMOTE}@${DM}:${SCRATCH_DST}/derived/" "${REPO}/data/derived/"
 }
 
+pull_figures() {
+  echo "<< pull ${DM}:${SCRATCH_DST}/derived/figures  ->  ${REPO}/data/derived/figures"
+  mkdir -p "${REPO}/data/derived/figures"
+  "${RSYNC[@]}" "${USER_REMOTE}@${DM}:${SCRATCH_DST}/derived/figures/" "${REPO}/data/derived/figures/"
+}
+
 case "${1:-}" in
   code)   sync_code ;;
   data)   sync_data ;;
   skills) sync_skills ;;
   all)    sync_code; sync_data; sync_skills ;;
   pull)   pull_outputs ;;
-  *) echo "usage: $0 {code|data|skills|all|pull}   (DRYRUN=1 to preview)"; exit 1 ;;
+  pull-figures) pull_figures ;;
+  pull-code) pull_code ;;
+  *) echo "usage: $0 {code|data|skills|all|pull|pull-figures|pull-code}   (DRYRUN=1 to preview, PULL_DELETE=1 for pull-code to mirror exactly)"; exit 1 ;;
 esac
 echo "done."

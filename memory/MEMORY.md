@@ -189,13 +189,24 @@ the window may cover substantial non-trial land; and canola flowering is brief (
 against a median of only 36 clear observations spread over ~8 months, so the flowering peak
 is often simply not sampled. Reconsider whether NDYI can carry the confirmation step at all,
 or whether Stage 2 needs a different discriminator.
-- [ ] `/novelty-check`
-- [ ] `/idea-review`
-- [ ] `/experiment-design-pipeline`
-- [ ] `/deploy-experiment`
-- [ ] `/auto-review-loop`
-- [ ] `/generate-report`
-- [ ] paper-writing-pipeline stages
+- [ ] `/novelty-check` — SKIPPED. Never run; the direction was locked from the lit review instead.
+      Owed before writing, since the novelty claim in a paper cannot rest on an unrun check.
+- [ ] `/idea-review` — SKIPPED, same.
+- [ ] `/experiment-design-pipeline` — SKIPPED. The experiment plan was built ad hoc, report by
+      report, rather than as an up-front roadmap.
+- [x] `/deploy-experiment` — **effectively COMPLETE as of 2026-08-25, run manually rather than
+      through the skill.** ~870 SU across ~500 PBS jobs: paddock segmentation, the 3-class model
+      (macro F1 0.821), the abandoned 4-class Grazing model, the inference stage, demo maps, the
+      national cost benchmark, and the first ABS/ABARES validation. `output/NEXT_STEPS.md` is the
+      current state; `output/archive/` holds the long history.
+- [ ] `/auto-review-loop` — NOT STARTED. This is the next pipeline stage once the 100 km maps land.
+- [ ] `/generate-report` — NOT STARTED.
+- [ ] paper-writing-pipeline stages — NOT STARTED.
+
+**Honest position in the pipeline (2026-08-25): stage 2 of 4 — experiments — nearly done, with
+three earlier stages skipped.** The skipped ones are cheap to run and matter for the paper, not
+for the science: novelty-check and idea-review would be run before drafting, not before more
+experiments.
 
 ## Direction locked in (2026-07-24)
 User selected **Gap #1 only** (foundation-model fine-tuning on GRDC labels for species-level classification) as the direction to pursue. Gaps #2–#5 stay in the report for context but are not separate contributions right now. Hard constraint: **output must stay 10 m resolution** throughout (downstream tree-shelter project needs paddock/tree-line detail) — this rules out MODIS-based features/comparisons as core inputs.
@@ -612,3 +623,139 @@ Reports: `output/NEXT_STEPS.md` (read this first), `SEPARABILITY_DIAGNOSIS.md`,
 - **Measurement bug caught in my own work:** first permutation-importance pass ran in-sample on
   a boosted model and returned all-negative importances. That is a broken measurement, not a
   weak signal. Now run on the temporal holdout with n_repeats=10 and macro-F1 scoring.
+
+## SENTINEL-1 IS THE BIGGEST FEATURE GAIN SO FAR (2026-08-09) — `output/S1_MODEL.md`
+Downloaded from MPC (6 copyq shards, 1,149 AOIs, 33 GB, **91.5 SU**), paddock medians of
+VV/VH/VH-VV extracted with the same polygon, erosion and median as the S2 pipeline.
+- **Controlled 3-way, identical 1,588 train / 477 test rows: optical 0.812, S1 alone 0.787,
+  optical+S1 0.856 temporal — and 0.822 / 0.789 / 0.866 spatial. +0.044 both splits**, ~4x the
+  control sd of 0.010 and about twice what the whole hand review of 1,973 polygons bought.
+- **It lands on Legume, exactly as predicted: F1 0.67 -> 0.75, precision 0.62 -> 0.75**
+  (spatial 0.67 -> 0.77). The named failure — cereals leaking into Legume — is what S1 fixes.
+- **S1 alone is worse than optical alone but NOT redundant**: the combination beats both by a
+  lot, so the sensors carry different information rather than noisy copies of the same thing.
+
+### THE COMPARISON THAT NEARLY HID IT — a fixed test set is necessary but NOT sufficient
+The first S1 arm scored **0.819 vs the optical 0.821 on the standard 543 rows: apparently no
+gain.** Cause: **66 of those 543 test rows have no S1 at all** and were scored anyway with every
+backscatter feature NaN. 12 % of the exam was sat with one sensor missing, and the average of
+"helps a lot on 477" and "handicapped on 66" came out flat.
+**This is the MIRROR IMAGE of the `REVIEWED_MODEL.md` +0.107 mirage — same root cause, opposite
+sign.** There, each arm got its own cleaner test rows and invented a gain; here, a shared test
+set containing rows the treatment cannot see erased a real one.
+⇒ **Rule: every arm must not only share the test rows, it must be ABLE TO SEE all of them.**
+Fix is not imputation — shrink to the rows all arms can answer (`keep_s1both_SENSITIVE.csv`)
+and say so. Controlled arms are `output/arms/*_ctl_*.md`; their scores are comparable ONLY to
+each other, not to the 543-row numbers elsewhere.
+
+### One S1 number beats peak CFI, in every stratum
+Univariate AUC in DOY 200-300: **Canola vs Cereal — VV 0.933 vs peak CFI 0.843; Legume vs
+Cereal — VV 0.836 vs CFI 0.628.** VH-VV for Legume-vs-Cereal is 0.248, i.e. inverted and just
+as strong. Stratifying by state and by year so only like is compared to like, **VV beats CFI in
+25 of 25 strata** (5/5 states and 8/8 years on both pairs). Not regional confounding.
+
+### S1B failure does NOT bite — hypothesis tested and refuted
+Median revisit stays **6 days** in 2022-24 (multiple relative orbits cover these sites), and VV/
+VH/VH-VV levels do not shift between eras. Group separation is if anything WIDER in the test
+era. Coverage 95.0-97.5 % of the training universe every year, no trend into 2023-24. Only
+trace: trials with <3 scenes in DOY 200-300 go 0.0 % (2017-21) -> 3.6 % (2023) -> 8.4 % (2024).
+The `NEXT_STEPS.md` §6 warning was worth checking and is not a caveat on the result.
+
+### AOI BOX BUG: centred on the trial point, sized for the paddock (2026-08-09)
+`s1_download.py` builds its box as lat/lon +- half_m **around the trial point**, but the thing
+measured is the **chosen paddock**, which the matcher may move up to 150 m away and which can
+exceed 300 ha. **54 trials had their paddock wholly outside the raster and produced no S1 rows
+at all; 28 more captured <70 % of the paddock.** A further 25 trials lost their AOI to ordinary
+download failures (expired SAS tokens on a 4 h job) — 107 needing repair in total.
+- **Diagnosed by `n_px_paddock` vs `paddock_ha`** (10 m pixels, so H ha = H x 100 px). That is
+  the measurement separating true clipping from the 10 m erosion every paddock loses by design.
+- **A strict bounding-box test overstated it ~6x.** 282 of 1,157 boxes (24 %) fail to contain a
+  bounding-box CORNER, which looks alarming, but a corner poking out costs almost no area —
+  measured median capture is 0.935 and only 107 trials lost anything. The `<90 % captured` group
+  is 94 % small paddocks losing area to erosion. **Sizing the repair off the geometric proxy
+  would have cost 4x the transfer to fix nothing — measure the quantity you care about.**
+- `s1_repair.pbs` re-fetches the **63 affected AOIs** with half_m from the paddock extent
+  (median 3,500 m, max 8,500 m vs the old flat 1,500 m). **Single shard by design** — every
+  shard runs the whole move-aside loop, so a second shard can move away a file the first just
+  downloaded; the script now refuses a shard count > 1.
+
+### Canola does NOT need S1
+Binary Canola-vs-Other on the controlled rows: optical 0.927, S1 alone 0.922, both 0.934 macro
+F1. Detection @5 % FPR swings 85.6-92.1 % across arms on n=139 canola — **treat as noise around
+~88 %, not a finding.** The canola map was already publishable on optical alone.
+
+### `train_species.py` crashed on the S1-only path (fixed 2026-08-09)
+With no optical block the feature-assembly line indexed an empty `parts` list (`IndexError`),
+killing the job under `set -e` before two later arms ran. `--s1` alone now works.
+Also: `s1_features.pbs` skips extraction when the table exists (`S1_FORCE_EXTRACT=1` rebuilds),
+so a re-run to fix one arm costs the arms alone.
+
+## S1 GAIN REVISED DOWN AFTER THE AOI REPAIR (2026-08-09 evening) — `S1_MODEL.md` §1, §2b
+Repairing 63 AOIs added 68 trials (2,065 -> 2,133; test rows 477 -> 497 of 543) and changed the
+answer: **optical 0.823/0.825, S1 alone 0.812/0.800, both 0.852/0.832 ⇒ +0.029 temporal,
++0.007 spatial** — where the pre-repair run said +0.044 on BOTH splits.
+- **The Legume story survives**: F1 0.69 -> 0.75, precision 0.66 -> 0.73 on temporal. The
+  spatial gain did not survive and must not be quoted.
+- **MODEL SEED VARIANCE IS EXACTLY ZERO.** 5 seeds gave byte-identical scores —
+  `HistGradientBoostingClassifier` only uses its RNG for the binning subsample and skips it
+  below 10,000 rows. **So seed-averaging measures nothing on this dataset**; all uncertainty is
+  in WHICH ROWS. A 3 % row change moved the gain by 0.015 temporal / 0.037 spatial.
+  **Lesson: I over-read "+0.044 on both splits, agreeing to 3 decimals" as corroboration when
+  it was coincidence.** Two splits over the same rows are not independent evidence.
+  Narrowing this needs a bootstrap over test rows, not more seeds.
+
+## PRESTO WITH S1 OVERTURNS THE OLD VERDICT (2026-08-09) — `presto_s1.pbs`
+Feeding VV/VH into Presto leaves only ERA5+SRTM masked (8 of 9 channel groups).
+**Presto alone 0.775 -> 0.813/0.808; optical+S1+Presto 0.857/0.858 vs optical+S1's
+0.852/0.832 ⇒ +0.005 temporal, +0.026 spatial** — and spatial is what the hand-built S1
+features FAILED to move. Presto is now within 0.010 of the 51 hand-built features on its own.
+- Constraint: **Presto's encoder asserts a uniform mask across a batch**, so trials without S1
+  are DROPPED, not masked. Embedding the two populations separately would satisfy the assert
+  but hand the classifier a difference that tracks S1 availability rather than the crop.
+
+## YIELD WORKS, AND CANOLA YIELD NEEDS S1 (2026-08-09) — `YIELD_MODEL.md`
+Spatial GroupKFold, identical rows, R2 against a year+state baseline:
+**Canola 0.290 base / 0.271 optical / 0.371 +S1 | Wheat 0.325 / 0.583 / 0.603 |
+Barley 0.089 / 0.542 / 0.529.** RMSE ~26-29 % of median for all three.
+- **EXACT INVERSE OF THE CLASSIFICATION RESULT.** S1 does nothing for canola ID (+0.007) and
+  everything for canola yield (+0.100); nothing for cereal yield and everything for pulse ID.
+  Mechanism: canola IDENTITY is flowering colour, which CFI already saturates; canola YIELD is
+  biomass/structure, which is what backscatter sees. CFI amplitude alone was Spearman 0.38;
+  with S1 it is 0.625.
+- **The year+state baseline is NEGATIVE on temporal transfer** (-0.28 to -0.65) because 2023-24
+  year-dummies are all-zero in training. That is the honest operational bar but a WEAK one —
+  quote the spatial comparison, not the +1.0 temporal "gains".
+- **Target is NVT trial yield, not commercial paddock yield.** Label s.e. ~0.07 t/ha; the
+  uncertainty is all in trial->paddock transfer, which `CANOLA_FLOWERING_AUDIT.md` shows is not
+  even reliably one-directional. Any map inherits an unquantified offset.
+- **BLOCKER for a cereal yield map**: the classifier emits Cereal, not wheat-vs-barley, and
+  their yields differ (3.92 vs 4.18 t/ha median).
+
+## NATIONAL RUN IS NOT AFFORDABLE AT prob>1 (2026-08-09) — `NATIONAL_INFERENCE_BENCHMARK.md`
+`nlum_tiles.py` counts segmentation tiles; a 12-tile benchmark on real NLUM tiles gives cost.
+- **prob > 1 is not a filter**: canola 80,462 tiles at **20.4x more land than NLUM says is
+  planted**; cereals 142,343 tiles at 4.8x. **One year costs ~10,400 SU (canola, no S1) to
+  ~32,000 SU (union, with S1) — 104 % to 320 % of the 10 KSU allocation.** At prob>2500 canola
+  is 24,941 tiles / ~3,200 SU, which fits.
+- **SAM IS NOT THE BOTTLENECK — pre-segment is, by ~2x.** SAM is **3 s/tile** on a V100
+  (0.030 SU/tile batched); the datacube read + Fourier composite is 0.059 SU/tile and is
+  I/O-bound. **Pre-segment cost TRIPLED vs the 2026-08-07 benchmark** (0.020 -> 0.059): 2x because I
+  requested 8 GB not 4 GB, rest from 70-146 scenes/tile. **The 8 GB was my mistake, not a
+  requirement** — see below.
+- **S1 does not scale**: 72 s/tile => 2,923 h serial for 146k tiles, ~12 days at 10 concurrent
+  copyq jobs. dz56 becomes a precondition, not a convenience, for any national S1 product.
+- **THE REAL BLOCKER IS NOT COMPUTE — there is no "not a crop" class.** Grazing is **287.9 Mha,
+  87.2 %** of NLUM agricultural land; the 3 target groups are 35.8 Mha (10.8 %). The model has
+  only ever seen NVT trial paddocks and a 3-way softmax cannot say "none of these", so it will
+  label pasture as Cereal at an unbounded rate. Segmentation already shows it: sampled tiles
+  produced polygons of 981 ha and 196 ha median against the trial set's 57 ha — rangeland with
+  no field boundaries. Fix before scaling: add a 4th class from strongly-grazing NLUM cells,
+  with NLUM-prior rejection as the reported fallback.
+
+## DO NOT SIZE PBS MEMORY OFF THE LOG (2026-08-09, user correction)
+gadi's resource footer reported "Memory Used: 8.0GB" of 8 GB requested and I concluded the job
+had hit its ceiling and recommended 12-16 GB nationally. **The user says that figure routinely
+reads at the request without the job needing it.** Raise memory ONLY on a real out-of-memory
+error (explicit OOM, or exit 137 / silent kill). Since `normal` charges
+`max(ncpus, mem/4GB) x 2 SU/hr`, sizing off that log line doubles the bill for identical work —
+worst exactly where it is hardest to spot, in a 100,000-tile run. Default stays 1 CPU / 4 GB.

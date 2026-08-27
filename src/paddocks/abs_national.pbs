@@ -1,0 +1,47 @@
+#!/bin/bash
+#PBS -N abs_nat
+#PBS -P xe2
+#PBS -q normal
+#PBS -l ncpus=8
+#PBS -l mem=32GB
+#PBS -l walltime=05:00:00
+#PBS -l storage=gdata/xe2+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+
+# Score the national 2024 map against ABS sown area in every cropping SA2 in Australia.
+#
+# WHY THIS IS A JOB AND THE RIVERINA VERSION WAS NOT. `abs_compare.py` concatenates every
+# prediction GeoPackage into one GeoDataFrame before it does anything, so its peak is set by the
+# whole run at once. The 102 km run was 465 MB on disk / 247 k polygon-years and peaked at
+# ~1.3 GB, which a login node absorbs. The national run is 2.24 GB on disk — 4.8x — so the same
+# code peaks near 7 GB, past what a login node will tolerate and squarely into "killed at hour
+# two with nothing written". 32 GB is ~4.5x the estimate rather than 1.2x on purpose: the sjoin
+# against 2,472 SA2 polygons is the step whose overhead was never measured at this scale, and a
+# re-run costs far more than the headroom does.
+#
+# WHY IT READS pred/*.gpkg AND NOT THE MERGED FILE. It is the same polygons either way, but the
+# chunk glob is the path that produced ABS_COMPARISON_100km.md, and it does not wait for
+# `merge` — the two jobs read the same inputs and can run side by side.
+#
+# NOT A FITTING PROCEDURE. --gate-sweep reports the map at several NDVI-amplitude gates as a
+# SENSITIVITY table. ABS is this project's only independent validation; choosing the gate that
+# best matches it would spend that validation to buy a better-looking number.
+
+set -euo pipefail
+export PROJ_NETWORK=OFF
+PY=/g/data/xe2/John/geospatenv/bin/python
+REPO=/home/147/cb8590/Projects/paddock-species
+D=/scratch/xe2/cb8590/paddock-species-data/derived
+M=$D/national2024
+cd $REPO/src/paddocks
+
+$PY abs_compare.py \
+    --pred "$M/pred/p*.gpkg" \
+    --abs $D/abs/abs_broadacre_area.csv \
+    --sa2 $D/abs/SA2_2021_AUST_GDA2020.shp \
+    --abares $D/abs/abares_state_area.csv \
+    --aois $M/aois.csv \
+    --out $REPO/output/ABS_COMPARISON_NATIONAL.md
+echo "Done abs_compare national"

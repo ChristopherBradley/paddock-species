@@ -1,0 +1,36 @@
+#!/bin/bash
+#PBS -N stab_merge
+#PBS -P xe2
+#PBS -q normal
+#PBS -l ncpus=1
+#PBS -l mem=8GB
+#PBS -l walltime=06:00:00
+#PBS -l storage=gdata/xe2+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+
+# The merge, the rotation section, and the consensus layer in one pass.
+#
+# MEASURED, 2026-08-25 (job 177406398): 9 min wall, 5 min CPU, 3.16 GB, **0.61 SU** for the
+# merge, the rotation section and the 25,082-polygon consensus layer together. An earlier note
+# predicted ~4 h from a cold-cache 1.5 s-per-open measurement; it was out by ~26x. Left as a job
+# rather than a login-node command because it opens 10,400 files and reads 30 prediction
+# GeoPackages, not because it is long.
+#
+# It does NOT shard, unlike the matching pass: the union-find identities have to be seen whole,
+# and at 9 min there is nothing to gain.
+
+set -euo pipefail
+export PROJ_NETWORK=OFF
+PY=/g/data/xe2/John/geospatenv/bin/python
+REPO=/home/147/cb8590/Projects/paddock-species
+D=/scratch/xe2/cb8590/paddock-species-data/derived
+M=$D/map100
+cd $REPO/src/paddocks
+
+$PY polygon_stability.py --polydir $M/samgeo --merge "$M/stability/s*.csv" \
+    --out $M/stability_all.csv --min-years 5 \
+    --pred "$M/pred/*.gpkg" --consensus $M/consensus.gpkg \
+    --report $REPO/output/POLYGON_STABILITY.md
+echo "Done stability merge"

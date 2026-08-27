@@ -1,0 +1,53 @@
+#!/bin/bash
+#PBS -N s1_controlled
+#PBS -P xe2
+#PBS -q normal
+#PBS -l ncpus=12
+#PBS -l mem=64GB
+#PBS -l walltime=01:00:00
+#PBS -l storage=gdata/xe2+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+
+# The three-way optical / S1 / both, on ONE row universe.
+#
+# Why this job exists. The first s1_only run was not comparable to anything: a paddock with no
+# S1 coverage has no features at all in an S1-only model, so it vanished from the run and the
+# arm scored itself on 477 test rows while every other arm used 543. Comparing 0.787 on 477
+# rows against 0.821 on 543 rows measures the exam as much as the model — the exact mistake
+# that produced the +0.107 mirage in REVIEWED_MODEL.md.
+#
+# The fix is not to impute the missing backscatter but to shrink every arm to the rows all
+# three can actually see: keep_s1both = keep_reviewed AND >=10 S1 obs AND >=10 optical obs,
+# 2065 trials, 477 of the 543 fixed test rows. Scores here are NOT comparable to the 543-row
+# arms in output/arms/ — they are only comparable to each other, which is the whole point.
+#
+# s1_only should reproduce 0.787/0.789 exactly. If it does not, the keep set is wrong.
+set -euo pipefail
+export PROJ_NETWORK=OFF
+export OMP_NUM_THREADS=1
+PY=/g/data/xe2/John/geospatenv/bin/python
+D=/scratch/xe2/cb8590/paddock-species-data/derived
+REPO=/home/147/cb8590/Projects/paddock-species
+cd $REPO/src/paddocks
+mkdir -p $REPO/output/arms
+
+S1TS=$D/s1_paddock_ts_SENSITIVE.csv
+OPT="$D/samgeo/ts_v2/*_SENSITIVE.csv"
+KEEP=$D/keep_arms/keep_s1both_SENSITIVE.csv
+TESTKEEP=$D/keep_arms/testkeep_temporal_SENSITIVE.csv
+
+# Rebuilt every run: the S1 table grows when repaired AOIs are re-fetched, and a stale keep set
+# would quietly score the new arms on the old, smaller row universe.
+$PY make_keep_s1both.py --indices "$OPT" --s1 $S1TS \
+    --keep $D/keep_arms/keep_reviewed_SENSITIVE.csv --test-keep $TESTKEEP --out $KEEP
+COMMON="--labeled $D/nvt_trials_labeled.csv --keep $KEEP --test-keep $TESTKEEP --importance-repeats 5"
+
+for T in group3 canola; do
+    U=$(echo $T | tr a-z A-Z)
+    $PY train_species.py --indices "$OPT"            $COMMON --target $T --out $REPO/output/arms/${U}_ctl_optical.md
+    $PY train_species.py --s1 $S1TS                  $COMMON --target $T --out $REPO/output/arms/${U}_ctl_s1.md
+    $PY train_species.py --indices "$OPT" --s1 $S1TS $COMMON --target $T --out $REPO/output/arms/${U}_ctl_both.md
+done
+echo "Done s1_controlled"

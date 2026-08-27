@@ -1,0 +1,59 @@
+#!/bin/bash
+#PBS -N presto_s1
+#PBS -P xe2
+#PBS -q normal
+#PBS -l ncpus=12
+#PBS -l mem=64GB
+#PBS -l walltime=02:00:00
+#PBS -l storage=gdata/xe2+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+
+# Presto, this time with Sentinel-1 — the re-run that `S1_MODEL.md` §7 called for.
+#
+# WHY THE OLD PRESTO VERDICT DOES NOT STAND. The previous run scored 0.775 alone and 0.824
+# combined, and was written up as "Presto without S1 does not beat CFI features". Three of
+# Presto's nine channel groups were masked: S1, ERA5 and SRTM. S1 has since been shown to be the
+# single most valuable feature block this project has (+0.044 macro F1), so the one missing
+# group that mattered is now available and the verdict has to be re-taken, not merely re-caveated.
+# ERA5 and SRTM stay masked; this is Presto with 8 of 9 groups, not the full article.
+#
+# ROWS. Presto's encoder asserts a uniform mask across a batch, so trials without S1 are dropped
+# rather than individually masked, and the arms therefore run on keep_s1both — the same rows as
+# the controlled feature arms, so `GROUP3_ctl_both` is the direct comparator. Do NOT compare
+# these to the 543-row arms.
+set -euo pipefail
+export PROJ_NETWORK=OFF
+export OMP_NUM_THREADS=1
+export PYTHONPATH=/g/data/xe2/cb8590/models/pylibs
+PY=/g/data/xe2/John/geospatenv/bin/python
+D=/scratch/xe2/cb8590/paddock-species-data/derived
+REPO=/home/147/cb8590/Projects/paddock-species
+cd $REPO/src/paddocks
+mkdir -p $REPO/output/arms
+
+PRESTO=$D/presto_embeddings_s1_SENSITIVE.csv
+$PY presto_embed.py \
+    --bands "$D/samgeo/bands_ts/*_SENSITIVE.csv" \
+    --s1 $D/s1_paddock_ts_SENSITIVE.csv \
+    --labeled $D/nvt_trials_labeled.csv \
+    --reviewed $D/reviewed_trials_SENSITIVE.csv \
+    --out $PRESTO
+
+KEEP=$D/keep_arms/keep_s1both_SENSITIVE.csv
+TESTKEEP=$D/keep_arms/testkeep_temporal_SENSITIVE.csv
+OPT="$D/samgeo/ts_v2/*_SENSITIVE.csv"
+COMMON="--labeled $D/nvt_trials_labeled.csv --keep $KEEP --test-keep $TESTKEEP \
+        --target group3 --importance-repeats 5"
+
+# Presto alone, against the hand-built features on identical rows
+$PY train_species.py --indices "$OPT" $COMMON \
+    --features-csv $PRESTO --features-only \
+    --out $REPO/output/arms/GROUP3_ctl_presto_s1_only.md
+
+# Presto on top of optical + S1: does the embedding carry anything the 102 features do not?
+$PY train_species.py --indices "$OPT" --s1 $D/s1_paddock_ts_SENSITIVE.csv $COMMON \
+    --features-csv $PRESTO \
+    --out $REPO/output/arms/GROUP3_ctl_presto_s1_plus.md
+echo "Done presto_s1"

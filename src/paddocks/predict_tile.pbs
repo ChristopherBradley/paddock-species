@@ -1,0 +1,39 @@
+#!/bin/bash
+#PBS -N predict_tile
+#PBS -P xe2
+#PBS -q normal
+#PBS -l ncpus=1
+#PBS -l mem=8GB
+#PBS -l walltime=04:00:00
+#PBS -l storage=gdata/xe2+gdata/v10+gdata/ka08+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+
+# Wall-to-wall classification of every segmented polygon in a tile.
+#
+# 8 GB, not the 4 GB the rest of the pipeline books. This stage holds the whole tile cube in
+# memory at once (t x y x x x bands) rather than one padded polygon at a time — that is the
+# point of it, since the read amortises over every polygon in the tile instead of being repeated
+# per polygon — and a 3 km tile in a recent year is ~90,000 px x ~60 scenes x 10 bands. Recent
+# years are the expensive ones: S2A+S2B+S2C all fly now, so revisit density, and with it the
+# cube, is far higher than in 2017-2020. The charge on `normal` is max(ncpus, mem/4GB) x 2 SU/hr,
+# so this is 4 SU/hr against 2 — book it deliberately, and see the standing note in
+# NATIONAL_INFERENCE_BENCHMARK.md §2: do NOT raise it further off a "Memory Used" log line,
+# only off a real OOM (explicit message, or exit 137 with no traceback).
+
+set -euo pipefail
+: "${AOIS:?set -v AOIS=}"
+: "${POLYDIR:?set -v POLYDIR=}"
+: "${MODEL:?set -v MODEL=}"
+: "${OUT:?set -v OUT=}"
+
+export PROJ_NETWORK=OFF
+export DATACUBE_CONFIG_PATH=/g/data/v10/public/modules/dea/20231204/datacube.conf
+PY=/g/data/xe2/John/geospatenv/bin/python
+
+cd /home/147/cb8590/Projects/paddock-species/src/paddocks
+echo "predict_tile AOIS=$AOIS MODEL=$MODEL OUT=$OUT"
+$PY predict_tile.py --aois "$AOIS" --polydir "$POLYDIR" --model "$MODEL" \
+    --out "$OUT" ${TIMINGS:+--timings "$TIMINGS"} ${EXTRA_ARGS:-}
+echo "Done predict_tile"

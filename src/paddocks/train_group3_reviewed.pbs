@@ -1,0 +1,73 @@
+#!/bin/bash
+#PBS -N g3_reviewed
+#PBS -P xe2
+#PBS -q normal
+#PBS -l ncpus=12
+#PBS -l mem=32GB
+#PBS -l walltime=03:00:00
+#PBS -l storage=gdata/xe2+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+
+# Does the hand review of the paddock polygons buy anything the model can see?
+#
+# FIVE ARMS, because the obvious two-arm comparison cannot answer it. The reviewed set is 2,301
+# trials and the baseline is 2,477, so "reviewed scores higher" would confound cleaner labels
+# with a different sample. The three size-matched controls draw 2,301 rows at random from the
+# baseline pool, so `reviewed` minus `control` is the effect of WHICH rows were dropped with
+# HOW MANY held fixed — which is the actual question. Three seeds because one draw is noise.
+#
+# The two keep-sets overlap on only 1,929 of their rows: the review dropped 548 that the
+# geometric filter had kept, and restored 372 that the compactness>6 sliver rule had removed
+# and the reviewer passed. So this is not a subset comparison in either direction.
+#
+# 12 CPUs: permutation_importance dominates this script and scales with cores — the same run
+# took over 90 min unfinished on 4 CPUs and 75 s on 12. Walltime 3 h covers five arms.
+set -euo pipefail
+export PROJ_NETWORK=OFF
+export OMP_NUM_THREADS=1     # importance runs 12 processes; OpenMP threads on top thrash
+PY=/g/data/xe2/John/geospatenv/bin/python
+D=/scratch/xe2/cb8590/paddock-species-data/derived
+REPO=/home/147/cb8590/Projects/paddock-species
+cd $REPO/src/paddocks
+mkdir -p $REPO/output/arms
+
+# THE TEST SET IS HELD FIXED across all arms, and it is the reviewed-good rows. Without this
+# the arm with the cleaner --keep is also scored on cleaner test labels, so "cleaning helps"
+# and "cleaning made the exam easier" are the same number. A dirty test label is not a
+# yardstick; the training set varies and the evaluation does not.
+TESTKEEP=$D/keep_arms/testkeep_temporal_SENSITIVE.csv
+
+run () {   # run <name> <keep-csv> [extra args...]
+    local name=$1 keep=$2; shift 2
+    echo "=== arm: $name ==="
+    $PY train_species.py \
+        --indices "$D/samgeo/ts_v2/*_SENSITIVE.csv" --labeled $D/nvt_trials_labeled.csv \
+        --keep "$keep" --test-keep "$TESTKEEP" --target group3 --importance-repeats 5 \
+        --out $REPO/output/arms/GROUP3_${name}.md "$@"
+}
+
+# Every keep here already CONTAINS the 543 fixed test rows, so no arm can fail to score one.
+# Only the <=2022 training rows differ: reviewed 1,651, baseline 1,818, controls 1,651 drawn at
+# random from baseline. That makes reviewed-minus-control the effect of WHICH training rows
+# were dropped with how many, and the exam, held constant.
+run reviewed  $D/keep_arms/keep_reviewed_SENSITIVE.csv \
+    --confusion-png $REPO/output/figures/confusion_group3_reviewed.png
+run baseline  $D/keep_arms/keep_baseline_SENSITIVE.csv
+for s in 0 1 2; do
+    run control_seed$s $D/keep_arms/keep_control_seed${s}_SENSITIVE.csv
+done
+# Presto arm. Same keep, same fixed test set, same model and metrics as `reviewed` — the only
+# difference is the feature matrix, so the comparison is attributable to the representation.
+# `--features-only` is the honest test of the embedding; the combined arm asks the different
+# question of whether it adds anything the 51 hand-built features do not already carry.
+PRESTO=$D/presto_embeddings_SENSITIVE.csv
+export PYTHONPATH=/g/data/xe2/cb8590/models/pylibs
+if [ -f "$PRESTO" ]; then
+    run presto_only $D/keep_arms/keep_reviewed_SENSITIVE.csv \
+        --features-csv $PRESTO --features-only
+    run presto_plus $D/keep_arms/keep_reviewed_SENSITIVE.csv \
+        --features-csv $PRESTO
+fi
+echo "Done presto arms"

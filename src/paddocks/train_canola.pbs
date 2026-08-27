@@ -1,0 +1,49 @@
+#!/bin/bash
+#PBS -N train_canola
+#PBS -P xe2
+#PBS -q normal
+#PBS -l ncpus=12
+#PBS -l mem=32GB
+#PBS -l walltime=01:30:00
+#PBS -l storage=gdata/xe2+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+
+# The canola-only map: binary Canola vs Other on the reviewed polygons.
+#
+# WHY THIS IS THE PUBLISHABLE ONE. It is the single target whose negative class needs no
+# within-group separability, and within-group separability is exactly what this dataset does
+# not have — cereals and legumes overlay each other on CFI, which is what caps Legume F1 at
+# 0.57. Canola is the class that stands clear, so a canola map is the result the data actually
+# supports rather than the one the nine-class ambition wanted.
+#
+# NEGATIVE CLASS IS EVERYTHING ELSE, not wheat. Lentil, faba bean, field pea and lupin all sit
+# ABOVE wheat on peak CFI, so canola-vs-wheat overstates detection by about 8 pp. Reported
+# with average precision against prevalence, because at ~26 % positives ROC AUC flatters.
+set -euo pipefail
+export PROJ_NETWORK=OFF
+export OMP_NUM_THREADS=1
+PY=/g/data/xe2/John/geospatenv/bin/python
+D=/scratch/xe2/cb8590/paddock-species-data/derived
+REPO=/home/147/cb8590/Projects/paddock-species
+cd $REPO/src/paddocks
+mkdir -p $REPO/output/arms
+
+$PY train_species.py \
+    --indices "$D/samgeo/ts_v2/*_SENSITIVE.csv" --labeled $D/nvt_trials_labeled.csv \
+    --keep $D/keep_arms/keep_reviewed_SENSITIVE.csv \
+    --test-keep $D/keep_arms/testkeep_temporal_SENSITIVE.csv \
+    --target canola --importance-repeats 5 \
+    --confusion-png $REPO/output/figures/confusion_canola_reviewed.png \
+    --out $REPO/output/arms/CANOLA_reviewed.md
+
+# Same target on the pre-review set, so the map's headline can be quoted with and without the
+# polygon cleaning rather than only after it.
+$PY train_species.py \
+    --indices "$D/samgeo/ts_v2/*_SENSITIVE.csv" --labeled $D/nvt_trials_labeled.csv \
+    --keep $D/keep_arms/keep_baseline_SENSITIVE.csv \
+    --test-keep $D/keep_arms/testkeep_temporal_SENSITIVE.csv \
+    --target canola --importance-repeats 5 \
+    --out $REPO/output/arms/CANOLA_baseline.md
+echo "Done train_canola"

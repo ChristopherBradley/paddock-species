@@ -7,6 +7,7 @@ data/
 **/nvt_trials_labeled.csv
 **/*site*level*.csv
 **/*_coords*.csv
+examples/*
 
 # Catch-all: anything explicitly named SENSITIVE can never be committed by accident.
 # Stage-2 writes figures/maps with this marker in the filename.
@@ -28,6 +29,14 @@ NLUM_v7_250_AgProbabilitySurfaces_2020_21_geo_package_20241128/
 # ---- Local reading material (not for the repo) ----
 Papers/
 extra papers/
+examples/
+
+# ============================================================
+# SENSITIVE — AgriWebb Snowflake credentials + beta-farm operational data
+# (real growers' paddock boundaries/crop types/yields; access is under an
+# AgriWebb research agreement, same handling standard as GRDC data above)
+# ============================================================
+**/agriwebb/credentials.py
 
 # ---- Any figure that plots site coordinates ----
 output/figures/*_map_*.png

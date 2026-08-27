@@ -1,0 +1,53 @@
+#!/bin/bash
+#PBS -N train_yield
+#PBS -P xe2
+#PBS -q normal
+#PBS -l ncpus=12
+#PBS -l mem=64GB
+#PBS -l walltime=01:00:00
+#PBS -l storage=gdata/xe2+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+
+# Yield regression on the paddock medians, for Canola / Wheat / Barley.
+#
+# Two arms because they answer different questions. `optical` is the one that can be run
+# nationally today from the DEA datacube alone; `optical+S1` is the one that says whether the
+# Sentinel-1 result carries over from crop type to yield. If S1 does not help yield, a yield map
+# does not need the MPC download and is far cheaper to produce at scale — which is a planning
+# decision, not just a scientific one.
+#
+# openpyxl is not in geospatenv; it is in the pylibs directory alongside einops.
+set -euo pipefail
+export PROJ_NETWORK=OFF
+export OMP_NUM_THREADS=1
+export PYTHONPATH=/g/data/xe2/cb8590/models/pylibs
+PY=/g/data/xe2/John/geospatenv/bin/python
+D=/scratch/xe2/cb8590/paddock-species-data/derived
+REPO=/home/147/cb8590/Projects/paddock-species
+RAW=/g/data/xe2/cb8590/paddock-species-data/raw
+XLSX="$RAW/2017-2024 NVT Yield and Grain Quality - cbradley - 01.05.2025.xlsx"
+cd $REPO/src/paddocks
+
+# The xlsx filename contains spaces, so it must be quoted at every use — it cannot be folded
+# into an unquoted $COMMON expansion, which is what silently split it into stray argv entries
+# and failed the first run in 42 s.
+COMMON="--labeled $D/nvt_trials_labeled.csv --crops Canola Wheat Barley"
+
+$PY train_yield.py --indices "$D/samgeo/ts_v2/*_SENSITIVE.csv" \
+    --keep $D/keep_arms/keep_reviewed_SENSITIVE.csv --yields "$XLSX" $COMMON \
+    --out $REPO/output/YIELD_optical.md
+
+$PY train_yield.py --indices "$D/samgeo/ts_v2/*_SENSITIVE.csv" --s1 $D/s1_paddock_ts_SENSITIVE.csv \
+    --keep $D/keep_arms/keep_s1both_SENSITIVE.csv --yields "$XLSX" $COMMON \
+    --out $REPO/output/YIELD_optical_s1.md
+
+# Optical on the S1 ROWS. Without this the optical-vs-S1 yield comparison is 2,194 rows against
+# 2,133 and measures the row set as much as the sensor — the same confound that hid the S1
+# classification gain for most of a day. This is the arm YIELD_optical_s1.md must be read
+# against; YIELD_optical.md is the wider-coverage number, not the comparator.
+$PY train_yield.py --indices "$D/samgeo/ts_v2/*_SENSITIVE.csv" \
+    --keep $D/keep_arms/keep_s1both_SENSITIVE.csv --yields "$XLSX" $COMMON \
+    --out $REPO/output/YIELD_optical_ctl.md
+echo "Done train_yield"

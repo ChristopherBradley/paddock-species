@@ -1,0 +1,71 @@
+#!/bin/bash
+#PBS -N s1_features
+#PBS -P xe2
+#PBS -q normal
+#PBS -l ncpus=12
+#PBS -l mem=64GB
+#PBS -l walltime=03:00:00
+#PBS -l storage=gdata/xe2+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+
+# Stage 2 + the S1 arms, chained to fire when the copyq downloads finish (afterany, so one
+# failed shard cannot strand the run — extraction simply sees fewer AOIs and says so).
+#
+# THE COMPARISON THAT MATTERS is s1_plus vs the existing `reviewed` arm: same keep, same fixed
+# 543 test rows, same model, the only difference being three backscatter channels. s1_only is
+# the sanity check that the S1 features carry signal at all on their own.
+#
+# Legume is the class to watch. It sits at F1 0.69 with precision 0.65 because cereals leak
+# into it, and VH/VV is the channel that should separate a bushy pulse canopy from a vertical
+# cereal one. If S1 helps anywhere, it helps there — so read the per-class table, not just the
+# macro average.
+set -euo pipefail
+export PROJ_NETWORK=OFF
+export OMP_NUM_THREADS=1
+PY=/g/data/xe2/John/geospatenv/bin/python
+D=/scratch/xe2/cb8590/paddock-species-data/derived
+REPO=/home/147/cb8590/Projects/paddock-species
+cd $REPO/src/paddocks
+mkdir -p $REPO/output/arms
+
+# Extraction is the slow half (~4 min over 33 GB of scenes) and its input, $D/s1, only
+# changes when the copyq downloads are re-run. Skip it if the table is already there, so a
+# re-run to fix a training arm costs the arms alone. S1_FORCE_EXTRACT=1 to rebuild.
+S1TS=$D/s1_paddock_ts_SENSITIVE.csv
+if [[ -s $S1TS && "${S1_FORCE_EXTRACT:-0}" != "1" ]]; then
+    echo "reusing existing $S1TS ($(wc -l < $S1TS) rows) — set S1_FORCE_EXTRACT=1 to rebuild"
+else
+    $PY s1_extract.py \
+        --s1dir $D/s1 --review-gpkg $D/figures/crop_heatmaps/PADDOCK_REVIEW_SENSITIVE.gpkg \
+        --review-sites $D/review_v2/review_sites.csv $D/review_v2_other/review_sites.csv \
+        --reviewed $D/reviewed_trials_SENSITIVE.csv \
+        --out $S1TS
+fi
+
+TESTKEEP=$D/keep_arms/testkeep_temporal_SENSITIVE.csv
+KEEP=$D/keep_arms/keep_reviewed_SENSITIVE.csv
+
+# optical + S1
+$PY train_species.py \
+    --indices "$D/samgeo/ts_v2/*_SENSITIVE.csv" --s1 $S1TS \
+    --labeled $D/nvt_trials_labeled.csv --keep $KEEP --test-keep $TESTKEEP \
+    --target group3 --importance-repeats 5 \
+    --confusion-png $REPO/output/figures/confusion_group3_s1.png \
+    --out $REPO/output/arms/GROUP3_s1_plus.md
+
+# S1 alone, to show the backscatter features are not inert
+$PY train_species.py \
+    --s1 $S1TS \
+    --labeled $D/nvt_trials_labeled.csv --keep $KEEP --test-keep $TESTKEEP \
+    --target group3 --importance-repeats 5 \
+    --out $REPO/output/arms/GROUP3_s1_only.md
+
+# and the canola map with S1
+$PY train_species.py \
+    --indices "$D/samgeo/ts_v2/*_SENSITIVE.csv" --s1 $S1TS \
+    --labeled $D/nvt_trials_labeled.csv --keep $KEEP --test-keep $TESTKEEP \
+    --target canola --importance-repeats 5 \
+    --out $REPO/output/arms/CANOLA_s1_plus.md
+echo "Done s1_features"

@@ -1,0 +1,59 @@
+#!/bin/bash
+#PBS -N noncrop_check
+#PBS -P xe2
+#PBS -q normal
+#PBS -l ncpus=12
+#PBS -l mem=32GB
+#PBS -l walltime=01:00:00
+#PBS -l storage=gdata/xe2+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+
+# How often does the 3-group model call a pasture paddock a crop?
+#
+# NATIONAL_INFERENCE_BENCHMARK.md §5 states this as the biggest obstacle to a national map and
+# says "there is no number in this project that bounds how often". This job produces that
+# number. It changes nothing about the model — the grazing paddocks are scored, never trained
+# on — so the arms stay comparable with everything already in output/arms/.
+#
+# The negatives are 128 NLUM-sampled grazing paddocks (nlum_negatives.py), 112 of them the
+# `hard` stratum: pasture sitting inside cropping country, where the soils, climate and paddock
+# geometry match the crops and only the cover differs. Sampling grazing nationally instead
+# would have landed in the Nullarbor and measured a far easier problem than deployment poses.
+#
+# THE LABELS ARE NLUM'S, NOT GROUND TRUTH, so this bounds the failure under NLUM's prior and
+# the hand review (figures/GRAZING_REVIEW.gpkg) is what upgrades it. Read the number as
+# provisional until those verdicts are filled in.
+#
+# Two arms, because the two feature sets are extracted differently and the answer could
+# plausibly differ: `indices` is the headline model (CFI/NDVI/NDYI paddock medians), `bands`
+# is the 10-band matrix. Same negatives, same splits, same fixed test set as every other arm.
+set -euo pipefail
+export PROJ_NETWORK=OFF
+export OMP_NUM_THREADS=1
+PY=/g/data/xe2/John/geospatenv/bin/python
+D=/scratch/xe2/cb8590/paddock-species-data/derived
+REPO=/home/147/cb8590/Projects/paddock-species
+cd $REPO/src/paddocks
+mkdir -p $REPO/output/arms
+
+TESTKEEP=$D/keep_arms/testkeep_temporal_SENSITIVE.csv
+KEEP=$D/keep_arms/keep_reviewed_SENSITIVE.csv
+
+# importance is not the question here and it dominates runtime, so it is off.
+echo "=== arm: indices (headline model) ==="
+$PY train_species.py \
+    --indices "$D/samgeo/ts_v2/*_SENSITIVE.csv" --labeled $D/nvt_trials_labeled.csv \
+    --keep "$KEEP" --test-keep "$TESTKEEP" --target group3 --importance-repeats 0 \
+    --score-extra "$D/samgeo/ts_grazing.csv" --extra-meta $D/grazing_sites.csv \
+    --out $REPO/output/arms/NONCROP_indices.md
+
+echo "=== arm: bands ==="
+$PY train_species.py \
+    --bands "$D/samgeo/bands_ts/*_SENSITIVE.csv" --labeled $D/nvt_trials_labeled.csv \
+    --keep "$KEEP" --test-keep "$TESTKEEP" --target group3 --importance-repeats 0 \
+    --score-extra "$D/samgeo/bands_ts_grazing.csv" --extra-meta $D/grazing_sites.csv \
+    --out $REPO/output/arms/NONCROP_bands.md
+
+echo "Done noncrop_check"

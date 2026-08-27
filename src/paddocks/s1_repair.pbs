@@ -1,0 +1,62 @@
+#!/bin/bash
+#PBS -N s1_repair
+#PBS -P xe2
+#PBS -q copyq
+#PBS -l ncpus=1
+#PBS -l mem=8GB
+#PBS -l walltime=04:00:00
+#PBS -l storage=gdata/xe2+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+
+# Re-fetch the 63 AOIs whose box was too small to hold the paddock it was supposed to measure.
+#
+# THE BUG. s1_download.py builds its box as lat/lon +- half_m around the TRIAL POINT, but the
+# thing being measured is the CHOSEN PADDOCK, which the matcher is allowed to move up to 150 m
+# away and which can itself be 300+ ha. So the box is centred on one object and sized for
+# another. 79 trials ended up with their paddock wholly outside the raster and produced no S1
+# rows at all; another 28 had less than 70 % of the paddock inside. Diagnosed by comparing
+# n_px_paddock against paddock_ha (10 m pixels => H ha = H*100 px), which is the measurement
+# that separates real clipping from the 10 m erosion every paddock legitimately loses.
+#
+# Not a general re-download: 282 of 1,157 boxes fail a strict bounding-box-corner test, but
+# the measured capture fraction is a median 0.935 and only these 63 AOIs lost anything that
+# matters. Sizing the repair off the corner test would have cost 4x the transfer for nothing.
+#
+# half_m here is recomputed per AOI as (furthest paddock extent from the AOI centre + 300 m),
+# rounded up to 500 m, floored at the original 1500. Median 3500 m, max 8500 m.
+#
+# Existing files are moved aside rather than deleted, because s1_download.py skips any AOI
+# whose output already exists and a half-finished repair must be resumable, not destructive.
+#
+# SINGLE SHARD ONLY, and the guard below enforces it. Every shard would run the whole
+# move-aside loop over the whole list, so a second shard can move away a file the first has
+# just downloaded — the loop is fast and the window is small, which is exactly what makes that
+# race the kind that shows up once in production and never in a test. 63 AOIs is ~1.3 h
+# serial, comfortably inside the walltime, so there is nothing to buy by sharding.
+set -euo pipefail
+SHARD=${SHARD:-0/1}
+if [ "${SHARD#*/}" != "1" ]; then
+    echo "refusing to run sharded (SHARD=$SHARD): the move-aside loop is not shard-safe" >&2
+    exit 2
+fi
+PY=/g/data/xe2/John/geospatenv/bin/python
+D=/scratch/xe2/cb8590/paddock-species-data/derived
+cd /home/147/cb8590/Projects/paddock-species/src/paddocks
+
+OLD=$D/s1_superseded
+mkdir -p $OLD
+while IFS=, read -r stub rest; do
+    [ "$stub" = "stub" ] && continue
+    for f in $D/s1/${stub}_s1.nc $D/s1/${stub}_s1.nc.empty; do
+        [ -e "$f" ] && mv -n "$f" $OLD/ || true
+    done
+done < $D/samgeo/aois_s1_repair_SENSITIVE.csv
+echo "moved $(ls $OLD | wc -l) superseded AOI files to $OLD"
+
+$PY s1_download.py \
+    --aois $D/samgeo/aois_s1_repair_SENSITIVE.csv \
+    --outdir $D/s1 \
+    --shard $SHARD ${LIMIT:+--limit $LIMIT}
+echo "Done s1_repair"

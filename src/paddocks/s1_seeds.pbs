@@ -1,0 +1,50 @@
+#!/bin/bash
+#PBS -N s1_seeds
+#PBS -P xe2
+#PBS -q normal
+#PBS -l ncpus=12
+#PBS -l mem=64GB
+#PBS -l walltime=01:00:00
+#PBS -l storage=gdata/xe2+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+
+# How big is the S1 gain really? Seed spread for optical vs optical+S1 on identical rows.
+#
+# WHY THIS RUN EXISTS. The first controlled measurement gave +0.044 on BOTH the temporal and
+# spatial splits, and the agreement to three decimals was read as evidence the effect was
+# solid. Repairing 63 AOIs then added 68 trials — a 3 % change to the row set — and the same
+# comparison moved to +0.029 temporal and +0.007 spatial. An effect that moves that much on a
+# 3 % data change is not established by a single fit, and the earlier agreement now looks like
+# coincidence rather than corroboration.
+#
+# So: 5 seeds per arm, and the gain is reported as a distribution, not a number. If the
+# per-seed spread is comparable to the gain, the honest conclusion is "S1 helps temporal
+# transfer by a small amount that this dataset cannot pin down", not "+0.044".
+#
+# importance is off (--importance-repeats 0): it is the dominant cost and answers a different
+# question. 10 fits at ~30 s each instead of 10 x ~2 min.
+set -euo pipefail
+export PROJ_NETWORK=OFF
+export OMP_NUM_THREADS=1
+PY=/g/data/xe2/John/geospatenv/bin/python
+D=/scratch/xe2/cb8590/paddock-species-data/derived
+REPO=/home/147/cb8590/Projects/paddock-species
+cd $REPO/src/paddocks
+mkdir -p $REPO/output/arms/seeds
+
+S1TS=$D/s1_paddock_ts_SENSITIVE.csv
+OPT="$D/samgeo/ts_v2/*_SENSITIVE.csv"
+KEEP=$D/keep_arms/keep_s1both_SENSITIVE.csv
+TESTKEEP=$D/keep_arms/testkeep_temporal_SENSITIVE.csv
+COMMON="--labeled $D/nvt_trials_labeled.csv --keep $KEEP --test-keep $TESTKEEP \
+        --target group3 --importance-repeats 0"
+
+for S in 0 1 2 3 4; do
+    $PY train_species.py --indices "$OPT" $COMMON --seed $S \
+        --out $REPO/output/arms/seeds/GROUP3_optical_seed$S.md
+    $PY train_species.py --indices "$OPT" --s1 $S1TS $COMMON --seed $S \
+        --out $REPO/output/arms/seeds/GROUP3_both_seed$S.md
+done
+echo "Done s1_seeds"

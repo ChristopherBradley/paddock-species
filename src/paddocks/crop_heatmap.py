@@ -92,6 +92,37 @@ def load_review(paths):
     return r[[c for c in keep if c in r.columns]].drop_duplicates("TrialCode")
 
 
+def apply_review(d, path):
+    """Keep only trials whose paddock a human judged usable. Returns (kept, reasons).
+
+    THIS REPLACES THE GEOMETRIC FILTER, it does not stack on top of it. Every one of the 1,973
+    polygons now carries a verdict, and the review tested the same failure modes the geometric
+    rules were proxies for — size, containment, and crops sharing one median — only directly,
+    on the imagery. Running both would mean overruling the reviewer with the proxy that the
+    reviewer was brought in to replace.
+
+    The one rule with no reviewed counterpart is compactness > 6, which dropped 640 trials
+    (19 % of the data) as slivers. The review contradicts it: 19 of the 150 randomly-sampled
+    validation polygons are compactness > 6 and the reviewer passed all 150, so the rule was
+    discarding mostly-good paddocks. It would still remove 228 polygons / 359 trials from the
+    reviewed-good set. `--max-compactness` can put it back, but the default no longer applies
+    it when `--reviewed` is given, and that is the reason.
+
+    `min_obs` and `tree_frac` DO still apply — they are properties of the pixels and the
+    observation record, not of the polygon, so a human looking at a boundary never judged them.
+    """
+    r = pd.read_csv(path)
+    usable = set(r.loc[r.usable.astype(bool), "TrialCode"])
+    judged = set(r.TrialCode)
+    # A trial with a time series but no verdict has never been through the review at all;
+    # dropping it silently would let unreviewed data in under the banner of a reviewed set.
+    unjudged = set(d.TrialCode) - judged
+    keep = d.TrialCode.isin(usable)
+    reasons = {"reviewed bad (human verdict)": int((~keep & d.TrialCode.isin(judged)).sum()),
+               "not in the review package": len(unjudged & set(d.TrialCode))}
+    return d[keep], reasons
+
+
 def quality_filter(d, args):
     """Drop trials whose paddock is not a plausible paddock. Returns (kept, reasons).
 
@@ -308,7 +339,12 @@ def main():
     ap.add_argument("--min-rows", type=int, default=8, help="skip thinner panels")
     ap.add_argument("--min-obs", type=int, default=15)
     ap.add_argument("--min-clear-frac", type=float, default=0.5)
-    ap.add_argument("--max-compactness", type=float, default=6.0)
+    ap.add_argument("--reviewed", help="reviewed_trials_SENSITIVE.csv from "
+                                       "build_review_package.py — human verdicts replace the "
+                                       "geometric quality filter (see apply_review)")
+    # Default None, not 6.0, so `--reviewed` can tell "the user asked for the sliver rule"
+    # from "nobody said". Without --reviewed it falls back to 6.0 as before.
+    ap.add_argument("--max-compactness", type=float, default=None)
     ap.add_argument("--max-area-ha", type=float, default=300.0)
     ap.add_argument("--min-area-ha", type=float, default=5.0)
     ap.add_argument("--max-tree-frac", type=float, default=0.20)
@@ -334,8 +370,21 @@ def main():
     n_before = len(d)
     if args.no_filter:
         reasons = {}
+    elif args.reviewed:
+        d, reasons = apply_review(d, args.reviewed)
+        # Only the pixel/observation rules survive; see apply_review for why the geometric
+        # ones do not. Passing --max-compactness explicitly still puts the sliver rule back.
+        # Finite sentinels, not inf: the reason strings are built with %d/%.1f and inf
+        # overflows int conversion. 1e9 ha is unreachable and reads as "off" in the log.
+        OFF = 1e9
+        geom = argparse.Namespace(**{**vars(args), "max_area_ha": OFF, "min_area_ha": 0.0,
+                                     "max_compactness": args.max_compactness or OFF})
+        d, more = quality_filter(d, geom)
+        reasons.update({k: v for k, v in more.items() if v})
     else:
-        d, reasons = quality_filter(d, args)
+        d, reasons = quality_filter(
+            d, argparse.Namespace(**{**vars(args),
+                                     "max_compactness": args.max_compactness or 6.0}))
     print(f"\nquality filter: {n_before} -> {len(d)} trials")
     for k, v in reasons.items():
         print(f"  dropped {v:5d}  {k}")
