@@ -108,6 +108,35 @@ def zonal_medians(ds, labels, n_poly, value_cols, kind):
     return out, n_clear, n_px
 
 
+def shape_gate(long, ndvi_col, SG):
+    """Peak-anchored green-up + post-harvest-senescence check, mirroring the DEPLOYABLE variant
+    fitted in phenology_gate.py (see that module's docstring for why it is peak-anchored rather
+    than sow/harv-anchored: no polygon here has a known planting or harvest date).
+
+    Returns a bool Series indexed like `long`'s TrialCode groups (True = passes the gate).
+    """
+    thr = SG["thresholds"]
+    pre_lo, pre_hi = SG["pre_window_days"]
+    post_lo, post_hi = SG["post_window_days"]
+    out = {}
+    for tc, g in long.groupby("TrialCode"):
+        d, v = g["time"], g[ndvi_col]
+        if len(v) < 3 or not np.isfinite(v.max()) or v.max() <= 0:
+            out[tc] = False
+            continue
+        peak = v.max()
+        peak_date = d[v.idxmax()]
+        pre = (d >= peak_date - pd.Timedelta(days=pre_lo)) & (d <= peak_date - pd.Timedelta(days=pre_hi))
+        post = (d >= peak_date + pd.Timedelta(days=post_lo)) & (d <= peak_date + pd.Timedelta(days=post_hi))
+        pre_val = v[pre].median() if pre.sum() >= 1 else np.nan
+        post_val = v[post].median() if post.sum() >= 1 else np.nan
+        greenup = (peak - pre_val) / peak if pd.notna(pre_val) else np.nan
+        senesc = (peak - post_val) / peak if pd.notna(post_val) else np.nan
+        out[tc] = bool(pd.notna(greenup) and greenup >= thr["greenup_rise"] and
+                       pd.notna(senesc) and senesc >= thr["senescence_drop"])
+    return pd.Series(out)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--aois", required=True, help="csv with stub,lat,lon,half_m,start,end,year")
@@ -118,6 +147,10 @@ def main():
                          "segmented, which produces a partial map that looks complete and "
                          "exits 0 — 63 chunks of the first national run did exactly that.")
     ap.add_argument("--model", required=True, help="joblib from fit_map_model.py")
+    ap.add_argument("--yield-model", default=None,
+                    help="joblib from fit_yield_model.py. Adds a yield_tha column, filled only "
+                         "for polygons whose predicted class matches the yield model's own "
+                         "`crop` (e.g. a Cereal-yield model scores only pred == 'Cereal' rows).")
     ap.add_argument("--out", required=True, help="output GeoPackage")
     ap.add_argument("--erode-m", type=float, default=10.0)
     ap.add_argument("--min-obs", type=int, default=10)
@@ -139,6 +172,15 @@ def main():
                          "crops clear it. Abstaining says 'no crop signature detected here', "
                          "which the labels support; naming a non-crop class is a claim they "
                          "do not.")
+    ap.add_argument("--crop-gate-shape", default=None,
+                    help="joblib from phenology_gate.py. A SEPARATE, STRICTER presence check: "
+                         "peak-anchored green-up + post-harvest senescence, not just amplitude "
+                         "(NEXT_STEPS.md #6.2 — amplitude alone cannot tell a real crop from "
+                         "sown-but-not-harvested pasture, which greens up just as hard). NOT "
+                         "validated against ABS area ratio yet, only against held-out NVT "
+                         "presence recall (output/PHENOLOGY_GATE.md) — do not make this the "
+                         "production default without that check. Stacks with --crop-gate-amp "
+                         "if both are given; either failing sets abstain_reason.")
     ap.add_argument("--doy", nargs=2, type=int, default=[90, 350], metavar=("START", "END"),
                     help="read only this day-of-year window, overriding the AOI's start/end. "
                          "Defaults to the exact span `build_features` bins over, which is also "
@@ -162,6 +204,17 @@ def main():
     clf, columns, value_cols, kind = B["model"], B["columns"], B["value_cols"], B["kind"]
     classes = list(clf.classes_)
     print(f"model: {B['target']}, {kind}, {len(columns)} features, classes {classes}")
+
+    YB = joblib.load(args.yield_model) if args.yield_model else None
+    if YB is not None:
+        print(f"yield model: {YB['crop']}, {len(YB['columns'])} features, "
+              f"trained on {YB['n_train']} paddocks, median {YB['yield_median']:.2f} t/ha")
+
+    SG = joblib.load(args.crop_gate_shape) if args.crop_gate_shape else None
+    if SG is not None:
+        print(f"shape gate: {SG['thresholds']}, held-out recall "
+              f"{SG['held_out_recall']:.1%} on {SG['n_train']} NVT trials "
+              f"(output/PHENOLOGY_GATE.md — NOT validated against ABS area ratio)")
 
     masker = None
     if not args.no_tree_mask:
@@ -289,8 +342,8 @@ def main():
         for j, c in enumerate(value_cols):
             long[c] = vals[pi, ti, j]
 
-        F = build_features(long, value_cols, False, None,
-                           B.get("bin_step")).reindex(columns=columns)
+        F_raw = build_features(long, value_cols, False, None, B.get("bin_step"))
+        F = F_raw.reindex(columns=columns)
         n_obs = pd.Series(pi).value_counts()
         ok = F.index[F.index.map(n_obs).fillna(0) >= args.min_obs]
         F = F.loc[ok]
@@ -307,6 +360,10 @@ def main():
         if args.crop_gate_amp is not None and ndvi_col:
             q = long.groupby("TrialCode")[ndvi_col].quantile([0.1, 0.9]).unstack()
             amp = (q[0.9] - q[0.1])
+
+        shape_pass = None
+        if SG is not None and ndvi_col:
+            shape_pass = shape_gate(long, ndvi_col, SG)
 
         proba = clf.predict_proba(F.values)
         pred = np.array(classes)[proba.argmax(axis=1)].astype(object)
@@ -329,6 +386,12 @@ def main():
             # deleting them would make the gate unauditable.
             g.loc[fails, "abstain_reason"] = "no_crop_signal"
             pred = np.where(fails.values, None, pred)
+        if shape_pass is not None:
+            fails_shape = ~shape_pass.reindex(F.index).fillna(False).values
+            # Do not overwrite an existing reason (area/amplitude already explains the abstain).
+            blank = g["abstain_reason"] == ""
+            g.loc[blank & fails_shape, "abstain_reason"] = "no_crop_shape"
+            pred = np.where(fails_shape, None, pred)
         g["pred"] = pred
         g["confidence"] = proba.max(axis=1).round(4)
         for k, c in enumerate(classes):
@@ -338,6 +401,22 @@ def main():
             (n_clear[F.index].sum(1) / np.maximum(n_px[F.index] * n_clear.shape[1], 1)), 3)
         g["treed_frac"] = np.round(treed[F.index], 3)
         g["n_feat_present"] = F.notna().sum(axis=1).values
+        if YB is not None:
+            # Only polygons the classifier actually called YB['crop'] get scored — an abstained
+            # polygon has pred None, which never matches, so it is left NaN rather than guessed.
+            is_target = (pred == YB["crop"])
+            g["yield_tha"] = np.nan
+            g["yield_tha_calibrated"] = np.nan
+            if is_target.any():
+                Fy = F_raw.reindex(columns=YB["columns"]).loc[F.index]
+                raw = YB["model"].predict(Fy.values[is_target])
+                # Raw is NVT-trial-equivalent yield, not commercial paddock yield (trial plots
+                # under trial management out-yield the field around them). `calibration_factor`
+                # is the measured NVT->ABS offset — see fit_yield_model.py and
+                # output/YIELD_CALIBRATION.md. Both columns ship; never only the calibrated one.
+                g.loc[is_target, "yield_tha"] = np.round(raw, 2)
+                g.loc[is_target, "yield_tha_calibrated"] = np.round(
+                    raw * YB.get("calibration_factor", 1.0), 2)
         out_parts.append(g)
 
         # The polygons that never reached the model, carried through with their reason.
@@ -377,6 +456,13 @@ def main():
         print(f"\nCOVERAGE: {int(cls.sum())} of {len(P)} polygons classified "
               f"({100 * cls.mean():.1f} %), {P.loc[cls, 'area_ha'].sum() / P.area_ha.sum() * 100:.1f} % by area")
         print(P[~cls].abstain_reason.value_counts().to_string())
+    if "yield_tha" in P.columns:
+        yv = P["yield_tha"].dropna()
+        yc = P["yield_tha_calibrated"].dropna()
+        print(f"\nYIELD ({YB['crop']}): {len(yv)} polygons scored, "
+              f"raw (NVT-equivalent) mean {yv.mean():.2f} t/ha, median {yv.median():.2f} t/ha")
+        print(f"  calibrated (x{YB.get('calibration_factor', 1.0):.4f}, ABS-offset): "
+              f"mean {yc.mean():.2f} t/ha, median {yc.median():.2f} t/ha")
 
 
 if __name__ == "__main__":

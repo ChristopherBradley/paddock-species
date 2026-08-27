@@ -227,7 +227,7 @@ predict)
         DEP=""; [ -n "$DEPS" ] && DEP="-W depend=afterany:$DEPS"
         JID=$(qsub $DEP -l mem=8GB -l walltime=05:00:00 \
              -v AOIS="$f",POLYDIR=$POLY,MODEL=$D/models/group3_map.joblib,\
-OUT=$M/pred/${b}.gpkg,EXTRA_ARGS="--max-area-ha 300 --crop-gate-amp 0.35" \
+OUT=$M/pred/${b}.gpkg,EXTRA_ARGS="--max-area-ha 300 --crop-gate-amp 0.35 --yield-model $D/models/cereal_yield.joblib" \
              -N pr_$b predict_tile.pbs)
         PPREV[$lane]=${JID%%.*}
         pi=$((pi + 1)); room=$((room - 1))

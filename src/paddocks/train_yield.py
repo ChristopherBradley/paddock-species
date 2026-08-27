@@ -41,7 +41,7 @@ from sklearn.model_selection import GroupKFold
 from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
 from scipy.stats import pearsonr, spearmanr
 
-from train_species import build_features
+from train_species import GROUP, build_features
 
 
 def load_ts(pat):
@@ -87,6 +87,11 @@ def main():
     ap.add_argument("--yields", required=True, help="NVT xlsx")
     ap.add_argument("--keep", required=True)
     ap.add_argument("--crops", nargs="+", default=["Canola", "Wheat", "Barley"])
+    ap.add_argument("--group", action="store_true",
+                     help="map species to the classifier's 3-group label (GROUP in "
+                          "train_species.py) before selecting --crops, e.g. --crops Cereal "
+                          "pools Wheat+Barley+Oat into one yield model matching what the "
+                          "crop-type classifier actually predicts")
     ap.add_argument("--min-obs", type=int, default=10)
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
@@ -117,7 +122,10 @@ def main():
     F = parts[0] if len(parts) == 1 else parts[0].join(parts[1:], how="inner")
     F = F.loc[:, F.notna().any()]
 
-    meta = lab.set_index("TrialCode").reindex(F.index)[["crop", "Year", "site", "state"]]
+    meta = lab.set_index("TrialCode").reindex(F.index)[["crop", "Year", "site", "state"]].copy()
+    if args.group:
+        meta["species"] = meta["crop"]
+        meta["crop"] = meta["crop"].map(GROUP)
     F = F.join(Y[["yield_tha"]])
     ok = F.yield_tha.notna() & meta.crop.notna()
     F, meta = F[ok], meta[ok]
@@ -149,6 +157,10 @@ def main():
         lines += [f"## {crop}", "",
                   f"- {len(sub)} trials, yield {np.median(y):.2f} t/ha median, "
                   f"sd {y.std():.2f}, range {y.min():.2f}-{y.max():.2f}", ""]
+        if "species" in m.columns:
+            counts = m["species"].value_counts()
+            lines += [f"- pooled species: " +
+                      ", ".join(f"{sp} {n} ({n/len(m):.1%})" for sp, n in counts.items()), ""]
 
         rows = []
         # temporal transfer

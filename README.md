@@ -39,8 +39,11 @@ do the remaining years.** GRDC/NVT trial data itself is under NDA and is never c
 | **Temporal transfer** (train ≤2022) | **0.821** | **89.0%** | 0.944 |
 | **Spatial transfer** (leave-site-out) | **0.823** | — | — |
 
-Per class (temporal): Cereal F1 0.90, Canola 0.88, **Legume 0.69** (the floor — cereal leaks into
-legume; Sentinel-1 addresses this, see below). Full detail: `output/REVIEWED_MODEL.md`.
+Per-class precision — of the paddocks the model *calls* a given crop, the share actually grown
+(temporal / spatial): Canola **0.94 / 0.91**, Cereal **0.89 / 0.89**, Legume **0.65 / 0.68** — the
+floor: about a third of paddocks called Legume are something else, almost all of it Cereal
+misclassified as Legume. Sentinel-1 addresses this, see below. Full detail, including confusion
+matrices: `output/REVIEWED_MODEL.md`, `output/arms/GROUP3_reviewed.md`.
 
 **Known limitation, found by independent validation.** Scored against ABS sown-area statistics by
 SA2 (a source with no connection to NVT) over 132 censused SA2s, the national map calls **1.47x** as
@@ -84,29 +87,6 @@ wheat-and-barley which yield differently, and the NVT-trial-vs-commercial yield 
 quantifiable via ABS production/area by SA2 (NVT trial yields consistently read above ABS regional
 averages, in the expected direction), though SA2-level estimates need outlier screening before
 trusting them individually. Full detail and a prioritised plan: `output/YIELD_FEASIBILITY.md`.
-
-## Next steps
-
-1. **Fix the crop-presence gate** — the dominant error in the map today (1.47x area over-call).
-   Two candidates, both fittable without touching ABS (which must stay an independent check):
-   - **Phenology shape, not amplitude.** A gate on the season's *shape* (one green-up at the right
-     time, ending in a hard senescence) rather than just its height — pasture can green up as hard
-     as a crop but rarely senesces like one. Fittable on the existing 3,439 NVT presence labels;
-     needs a small feature-dump change and a ~100-tile re-run (~6 SU) to test.
-   - **Sentinel-1 for crop *presence*** (a ploughed/stubble paddock backscatters very differently
-     from standing pasture) — a different use of S1 than the species-classification test below.
-2. **Sentinel-1 for species classification — measured, not yet bought nationally.** +0.03 macro F1
-   (temporal transfer only; spatial gain is within noise), concentrated entirely in Legume (F1 0.69
-   → 0.75, fixing cereal misclassified as legume). Estimated cost: ~277 SU to test on the Riverina
-   region over 3 years vs. ~7,957 SU nationally. **Two caveats that weakened the case since first
-   measured:** most of the mapped legume over-prediction turned out to be the presence-gate problem
-   above rather than classifier confusion, so S1's real-world benefit may be smaller than +0.03; and
-   Sentinel-1B's failure (Dec 2021) plus Sentinel-1C's late start (operational May 2025) leave uneven
-   revisit density across the 2017-2025 run that any S1 feature needs to correct for. Recommendation:
-   fix the gate and re-measure the legume residual before deciding. Full detail:
-   `output/SENTINEL1_VALUE.md`, `output/SENTINEL1_ACCESS.md`.
-3. **Yield model** — see above, roughly half a day of work once the gate is fixed.
-4. Do not re-tune SAM parameters (already ruled out).
 
 ## Sensitive data
 
