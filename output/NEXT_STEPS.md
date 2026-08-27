@@ -443,20 +443,27 @@ neither live nor logged did not run.
    should not be admitting that land.
    **It must be fitted on something other than ABS** — ABS is the only independent validation this
    project has and spending it as a training signal leaves nothing to check the result with.
-   - **Phenology shape, not amplitude.** `PRESENCE_ONLY_LABELS.md` §1 already says why amplitude
-     alone cannot work: improved annual pasture greens up and senesces as hard as a crop. A gate
-     on the *shape* of the season — one green-up, at the right time, ending in a hard senescence —
-     is fittable on the 3,439 NVT presence labels alone, exactly as the amplitude gate was.
-     **The features to test it are not currently saved**: `predict_tile.py` writes summary
-     attributes, not the DOY-binned series. Add `--dump-features` and re-run ~100 tiles (~6 SU) to
-     compare the mean seasonal profile of high- and low-score paddocks. If the low group has no
-     harvest drop, the sown-but-not-harvested reading is confirmed directly rather than inferred.
+   - **Phenology shape, not amplitude — tried, 2026-08-27, `PHENOLOGY_GATE.md`.** `phenology_gate.py`
+     fits a peak-anchored green-up + post-harvest-senescence gate on the NVT presence labels, and
+     `run_map100.sh predict-shapegate` re-scored the full 100 km x 9-year Riverina run with it
+     stacked on the amplitude gate (120 SU). **The area ratio moved exactly where hoped: 1.59 ->
+     1.00.** But this is **not a clean win** — canola-specific presence recall is only **83.4%**,
+     against cereal's 95.1% and legume's 95.5% (canola senesces less sharply post-flowering by
+     this metric, so one shared threshold screens more of it out), and the acceptance criterion
+     below is met in aggregate (91.9% pooled) and **fails for canola specifically**. Mapped canola
+     share did not move (still 23.4% vs ABS 36.2%) — fixing the area over-call unmasked a real
+     canola recall shortfall that dilution was previously hiding. **Verdict: trades an
+     area-inflation problem for a canola-undercount problem, not a smaller problem.** Not shipped
+     as the default. Two untried fixes for the canola gap, in `PHENOLOGY_GATE.md`'s own next
+     step: a looser `senescence_drop` threshold, or two-pass gating (amplitude only for
+     canola-like signals, shape for the rest).
    - **Sentinel-1 for crop PRESENCE rather than crop type.** A ploughed or stubble paddock and a
      standing pasture differ in backscatter far more than in NDVI amplitude. This is a *different*
-     use of S1 from the one costed in `SENTINEL1_VALUE.md`.
-   **Acceptance criterion, fixed before the work starts:** the area ratio moves from 1.59 toward
+     use of S1 from the one costed in `SENTINEL1_VALUE.md`. Not tried.
+   **Acceptance criterion, fixed before the work started:** the area ratio moves from 1.59 toward
    1.0 *while* presence recall on the NVT trials stays at or above the 91.6 % the current gate
-   achieves. Both numbers or neither — a gate can reach ratio 1.0 by rejecting everything.
+   achieves. Both numbers or neither — a gate can reach ratio 1.0 by rejecting everything. **The
+   phenology-shape attempt got exactly one of the two.**
 3. **Ship the two confidences separately, never blended.** §4b: `ndvi_amp` orders paddocks by
    whether a crop is there; `n_years`/`median_iou` order them by whether the *boundary* is real
    and are no better than random at the first job. One column each.

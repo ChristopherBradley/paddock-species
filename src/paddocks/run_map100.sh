@@ -110,6 +110,19 @@ OUT=$M/pred/${b}.gpkg,EXTRA_ARGS="--max-area-ha 300 --crop-gate-amp 0.35" \
              -N pr_$b predict_tile.pbs
     done
     ;;
+predict-shapegate)
+    # Same run, same segmentation, `--crop-gate-shape` stacked on top of the existing amplitude
+    # gate — isolates the phenology-shape gate's effect for output/PHENOLOGY_GATE.md's still-open
+    # question (NEXT_STEPS.md #6.2): does the area ratio move toward 1.0 while presence recall
+    # holds? Separate output dir so the validated baseline in $M/pred is never touched.
+    mkdir -p $M/pred_shapegate
+    for f in $CH/p*.csv; do
+        b=$(basename "$f" .csv)
+        qsub -l mem=8GB -v AOIS="$f",POLYDIR=$POLY,MODEL=$D/models/group3_map.joblib,\
+OUT=$M/pred_shapegate/${b}.gpkg,EXTRA_ARGS="--max-area-ha 300 --crop-gate-amp 0.35 --crop-gate-shape $D/models/phenology_gate.joblib" \
+             -N prs_$b predict_tile.pbs
+    done
+    ;;
 stability)
     mkdir -p $M/stability
     # 20 shards: ~9 CPU-hours of GeoPackage opening split into ~27 min each. See stability.pbs
@@ -127,5 +140,5 @@ stability-merge)
         --report $REPO/output/POLYGON_STABILITY.md
     ;;
 *)
-    echo "usage: $0 {aois|presegment|sam|status|predict|stability|stability-merge}" >&2; exit 2 ;;
+    echo "usage: $0 {aois|presegment|sam|status|predict|predict-shapegate|stability|stability-merge}" >&2; exit 2 ;;
 esac
