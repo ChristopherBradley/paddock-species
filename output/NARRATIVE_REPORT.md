@@ -124,29 +124,87 @@ with this identical configuration.
 
 ## 7. What a paper from this project would actually be about
 
-Not the originally-proposed foundation-model confusability study. The defensible empirical
-contributions, as the work actually stands:
+Not the originally-proposed foundation-model confusability study, and not a methods paper whose
+findings stand alone either. **The primary contribution, as the work actually stands, is the
+dataset itself** — a national, polygon-level, three-class (Canola/Cereal/Legume) crop-species map
+of Australia at 10 m, built end-to-end from open Sentinel-2 imagery and field-verified GRDC/NVT
+ground truth, with per-polygon confidence, abstain reasons, and a calibrated Cereal yield attached.
+The literature review's own validation gap (`LIT_REVIEW_REPORT.md`, gap #4: "no study
+cross-validates a national Australian crop-species map against NLUM and a WorldCereal-style global
+product") is a description of exactly what this project produced and did not yet finish auditing.
+A paper from this project reads best as a **data-descriptor / resource paper** (`Scientific
+Data`-, `ISPRS Open Journal`-, or `RSE`-data-note-style), built around the four questions any
+reader of the dataset will ask first, in order:
+
+- **How it was created.** §2 of this report, end to end: SAMGeo segmentation with segmentability
+  itself doubling as a crop-presence mask, a 3-class gradient-boosted classifier on paddock-median
+  spectral indices, an NDVI-amplitude presence gate, and a Cereal yield attribute — all fitted on
+  GRDC/NVT trial-site labels and none of it touching the ABS statistics used to check it.
+- **What is in it.** `NATIONAL_2024_RUN.md` §1: **1,346,582 polygons, 2.8 GB**, EPSG:3577,
+  98.9% of 99,465 national tiles for the 2024 season, every polygon carrying `area_ha`,
+  `compactness`, `pred`, `confidence`, per-class probability, `ndvi_amp`, `abstain_reason`, and —
+  where the prediction is Cereal — both raw and ABS-calibrated yield. **48.4% of polygons (34.4%
+  of area) carry a classification**; the rest are retained with the specific reason they were not
+  classified, which is itself part of the product, not missing data.
+- **Accuracy, measured against an independent official statistic.** Composition against ABS sown
+  area across 132 censused SA2s: canola share **r = 0.82**, median absolute error 5.5 points;
+  cereal share close to ABS at the aggregate level; legume the floor at +10.8 points of absorbed
+  over-call plus a further classification error the gate does not explain (18.4% mapped vs 8.7%
+  ABS, argmax and mean-probability agreeing, ruling out a decision-rule fix). This is the
+  strongest accuracy claim available — an aggregate check against a statistic with no connection
+  to the training pipeline — and its own honest floor is stated alongside it: ABS and ABARES
+  disagree with each other by a median 6.8% on national sown area, so no map-vs-ABS number tighter
+  than that should be reported as if it were map error.
+- **Limitations, stated as operating characteristics, not caveats to bury.** The **1.47x
+  area-inflation** (§3-4 above, concentrated in Cereal/Legume, essentially absent from Canola) is
+  the headline one — a reader who wants the area-accurate view can already filter on `ndvi_amp`
+  and `abstain_reason`, because both ship on every polygon. Behind it: **legume misclassification**
+  distinct from the presence problem; **37 Mha sitting in `unsegmented_blob`**, SAM's single
+  largest failure mode; single-season 2024 only, with 2017/2018 flagged in advance as
+  structurally weaker years once the multi-year run happens; yield shipped for Cereal only, with
+  no canola yield because optical-only R² (0.27) loses to guessing the year and state.
+
+**What is not yet in the dataset story, and is the single most reviewer-obvious next step**: a
+direct spatial comparison against an existing product — NLUM's 250 m probability surfaces or a
+WorldCereal/Dynamic World-style global classification — rather than only an aggregate ABS
+composition check. NLUM appears in this project only as a coverage mask for the national run
+(`NATIONAL_2024_RUN.md` §1, "mask = NLUM winter cereals ∪ oilseeds ∪ legumes"), never as a
+compared product; WorldCereal (via Presto) was tried only as an embeddings backbone for the
+classifier and lost to hand-built features (§1), never evaluated as a finished map against this
+one. Both are sitting in the repo's own literature review as the obvious comparison and neither
+has been run. A polygon- or pixel-level agreement map against NLUM, and/or a class-agreement table
+against a WorldCereal Australian tile, would be the strongest single addition available before
+drafting — it is the comparison a reviewer of a data-descriptor paper asks for first, and it is
+currently unclaimed.
+
+The methodological findings below are not independent contributions so much as the supporting
+material that explains *why* the dataset looks the way it does — each one earns its place in the
+paper by answering a question the dataset itself raises:
 - A label-conflict finding specific to trial-network ground truth (co-located NVT trials sharing
   one segmented polygon) and a resolution (group collapsing + hand review), likely generalisable
-  to any crop-classification project using point-based agronomic trial networks as labels.
+  to any crop-classification project using point-based agronomic trial networks as labels —
+  explains why the classifier is 3-group rather than species-level.
 - A negative result for foundation-model embeddings (Presto) against hand-built spectral features
-  on this label volume and class structure.
+  on this label volume and class structure — explains why the shipped classifier is not a
+  fine-tuned foundation model, contra the original brief.
 - A demonstrated failure mode for absence-labelled negative classes built from presence-only
   farmer records (the AgriWebb Grazing retirement), and a presence-only alternative
   (segmentability-as-mask + phenology gate) validated at national scale against an independent
-  official statistic — ABS sown area — rather than a held-out label split.
+  official statistic — explains the abstain-reason design that is now a first-class part of the
+  dataset schema.
 - A quantified trade-off between two different gate designs (amplitude vs. phenology-shape) on
   the *same* independent validation, including the specific mechanism (differential per-crop
-  recall) that made the more sophisticated gate the wrong choice — a useful cautionary result in
-  its own right.
+  recall) that made the more sophisticated gate the wrong choice to ship — explains why the
+  dataset carries the 1.47x over-call rather than a stricter, smaller, canola-blind alternative.
 - A measured, honestly-caveated NVT-trial-to-commercial-yield offset, using ABS production data as
-  the calibration reference at national scale.
+  the calibration reference at national scale — explains the two yield columns the dataset ships.
 
 ## 8. Evidence map
 
 | claim in this report | source document |
 |---|---|
 | Original idea and gap analysis | `LIT_REVIEW_REPORT.md`, `IDEA_REPORT.md` |
+| Dataset-as-primary-contribution framing, unclaimed NLUM/WorldCereal comparison | `LIT_REVIEW_REPORT.md` (gap #4), `NATIONAL_2024_RUN.md` §1 |
 | Label-conflict finding | `memory/MEMORY.md` ("CO-LOCATED TRIALS..."), `REVIEWED_MODEL.md` |
 | Classifier accuracy | `REVIEWED_MODEL.md`, `output/arms/GROUP3_reviewed.md` |
 | Presence gate design and AgriWebb retirement | `PRESENCE_ONLY_LABELS.md` |
