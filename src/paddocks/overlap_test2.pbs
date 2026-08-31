@@ -1,0 +1,55 @@
+#!/bin/bash
+#PBS -N overlap_test2
+#PBS -P xe2
+#PBS -q gpuvolta
+#PBS -l ncpus=12
+#PBS -l ngpus=1
+#PBS -l mem=90GB
+#PBS -l jobfs=50GB
+#PBS -l walltime=00:45:00
+#PBS -l storage=gdata/xe2+gdata/v10+gdata/ka08+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+
+# Follow-up to overlap_test.pbs: that job tested ONE Legume/Cereal boundary-split pair and found
+# the wider AOI reproduced the large fragment almost exactly but did NOT recover the small
+# fragment as a merged or separate polygon -- suggesting (from n=1) the small fragment might be a
+# segmentation artifact of the cut view, not a genuine second paddock. This job re-runs the same
+# wider-AOI diagnostic on 3 more mismatched boundary pairs (independently re-found by re-deriving
+# the 60km-Riverina-box grid-line-touching search from PIPELINE_ARCHITECTURE_AND_TILING.md sec 5;
+# the original ad-hoc query wasn't saved to a script) to see whether the pattern generalises.
+# Same SAM settings as production (sam_kwargs=None), same year (2024), half-m=2000 (4km square).
+set -euo pipefail
+export PROJ_NETWORK=OFF
+export DATACUBE_CONFIG_PATH=/g/data/v10/public/modules/dea/20231204/datacube.conf
+PY=/g/data/xe2/John/geospatenv/bin/python
+
+cd /home/147/cb8590/Projects/paddock-species/src/paddocks
+nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null || echo "no GPU"
+
+OUT=/scratch/xe2/cb8590/paddock-species-data/derived/overlap_test
+mkdir -p "$OUT"
+
+# pair 2: Legume 5.08ha / Cereal 16.96ha, horizontal boundary, (147.163712E, -34.536158S)
+$PY samgeo_segment.py all \
+    --lat -34.536158 --lon 147.163712 --half-m 2000 \
+    --start 2024-01-01 --end 2024-12-31 \
+    --outdir "$OUT" --stub overlap_demo2
+echo "Done pair 2"
+
+# pair 3: Canola 11.96ha / Legume 25.50ha, vertical boundary, (147.359910E, -34.734015S)
+$PY samgeo_segment.py all \
+    --lat -34.734015 --lon 147.359910 --half-m 2000 \
+    --start 2024-01-01 --end 2024-12-31 \
+    --outdir "$OUT" --stub overlap_demo3
+echo "Done pair 3"
+
+# pair 4: Canola 11.81ha / Cereal 14.59ha, horizontal boundary, (147.346180E, -34.653927S)
+$PY samgeo_segment.py all \
+    --lat -34.653927 --lon 147.346180 --half-m 2000 \
+    --start 2024-01-01 --end 2024-12-31 \
+    --outdir "$OUT" --stub overlap_demo4
+echo "Done pair 4"
+
+echo "Done overlap_test2"

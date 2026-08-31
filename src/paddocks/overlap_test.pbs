@@ -1,0 +1,37 @@
+#!/bin/bash
+#PBS -N overlap_test
+#PBS -P xe2
+#PBS -q gpuvolta
+#PBS -l ncpus=12
+#PBS -l ngpus=1
+#PBS -l mem=90GB
+#PBS -l jobfs=50GB
+#PBS -l walltime=00:30:00
+#PBS -l storage=gdata/xe2+gdata/v10+gdata/ka08+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+
+# One-shot diagnostic: does a single, wider AOI centred ON a known tile-boundary split (the
+# Legume/Cereal pair found at ~(147.1083E, -34.6230S), Riverina area, 2026-08-30) merge the
+# paddock into one SAM polygon, when the current national pipeline's 3km edge-to-edge tiling
+# cuts it into two independently-segmented, independently-classified fragments?
+# Same SAM settings as production (sam_kwargs=None -- library defaults), same year (2024), so
+# the only variable under test is "does this AOI's read window cross the old tile boundary."
+set -euo pipefail
+export PROJ_NETWORK=OFF
+export DATACUBE_CONFIG_PATH=/g/data/v10/public/modules/dea/20231204/datacube.conf
+PY=/g/data/xe2/John/geospatenv/bin/python
+
+cd /home/147/cb8590/Projects/paddock-species/src/paddocks
+nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null || echo "no GPU"
+
+OUT=/scratch/xe2/cb8590/paddock-species-data/derived/overlap_test
+mkdir -p "$OUT"
+
+$PY samgeo_segment.py all \
+    --lat -34.622992 --lon 147.108290 --half-m 2000 \
+    --start 2024-01-01 --end 2024-12-31 \
+    --outdir "$OUT" --stub overlap_demo
+
+echo "Done overlap_test"
