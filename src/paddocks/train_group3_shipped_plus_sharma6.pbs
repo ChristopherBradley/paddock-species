@@ -1,0 +1,41 @@
+#!/bin/bash
+#PBS -N g3_shipped_sharma6
+#PBS -P xe2
+#PBS -q normal
+#PBS -l ncpus=12
+#PBS -l mem=32GB
+#PBS -l walltime=01:00:00
+#PBS -l storage=gdata/xe2+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+
+# Full validation of the CLEAN candidate identified after independent review
+# (INDEPENDENT_REVIEW_19index.md #2): the shipped model's own 3 indices (--indices, per-pixel-
+# index-then-median, exactly as shipped) plus Sharma et al. 2026's 6 indices computed from bands
+# and nothing else (--bands-keep-families), joined together. 153 features, not 333 -- no bundled
+# never-shipped index families, no bands-pathway CFI substitution, no --bands-drop-raw
+# leak (fixed separately, family() bugfix). This superseded the messier "all19 idx-only"
+# candidate: same or better macro F1 (0.890 temporal / 0.892 spatial vs. 0.892/0.884) with NO
+# regression on canola-at-5%-FPR (89.0%, exactly matching shipped, vs. the other candidate's
+# 85.8%).
+set -euo pipefail
+export PROJ_NETWORK=OFF
+export OMP_NUM_THREADS=1
+PY=/g/data/xe2/John/geospatenv/bin/python
+D=/scratch/xe2/cb8590/paddock-species-data/derived
+REPO=/home/147/cb8590/Projects/paddock-species
+cd $REPO/src/paddocks
+
+$PY train_species.py \
+    --indices "$D/samgeo/ts_v2/*_SENSITIVE.csv" \
+    --bands "$D/samgeo/bands_ts/*_SENSITIVE.csv" \
+    --bands-keep-families ndre2 vi2 vi3 vdvi vci evi2_sharma \
+    --labeled $D/nvt_trials_labeled.csv \
+    --keep $D/keep_arms/keep_reviewed_SENSITIVE.csv \
+    --test-keep $D/keep_arms/testkeep_temporal_SENSITIVE.csv \
+    --target group3 --model hgb --importance-repeats 5 \
+    --confusion-png $REPO/output/figures/confusion_group3_shipped_sharma6_temporal.png \
+    --spatial-confusion-png $REPO/output/figures/confusion_group3_shipped_sharma6_spatial.png \
+    --out $REPO/output/GROUP3_MODEL_shipped_plus_sharma6.md
+echo "Done train_group3_shipped_plus_sharma6"

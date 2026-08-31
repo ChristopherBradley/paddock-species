@@ -1,0 +1,59 @@
+#!/bin/bash
+#PBS -N idx_arch_sweep
+#PBS -P xe2
+#PBS -q normal
+#PBS -l ncpus=12
+#PBS -l mem=32GB
+#PBS -l walltime=03:00:00
+#PBS -l storage=gdata/xe2+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+
+# Does adding EVI/EVI2/SAVI/GNDVI/CIre (train_species.py's add_indices(), 2026-08-31) or
+# switching model architecture (rf/et/logreg, alongside the shipped hgb) beat the shipped
+# 3-index/hgb group3 baseline (GROUP3_reviewed.md: macro F1 0.821 temporal, 0.823 spatial)?
+#
+# Same methodology as train_group3_reviewed.pbs's arms, on purpose: same --keep (hand-reviewed
+# rows) and same --test-keep (fixed 543-row test set), so a score difference is attributable to
+# the feature set / model and not to which rows got trained or scored on. Only those two things
+# vary across the matrix below.
+#
+# THREE feature arms x FOUR models = 12 runs. --importance-repeats 0 for all of them (that step
+# dominates runtime per train_group3_reviewed.pbs's own comment and isn't the question this
+# sweep asks) -- rerun with importance only for whichever arm, if any, actually wins.
+#   indices      -- the shipped 3-index pathway (51 features): control at each new architecture
+#   bands        -- 10 raw bands + 13 derived indices (8 existing + 5 new), all WITH full
+#                   season-summary stats now that build_features()'s summary-stat gap is fixed
+#   bands_idxonly -- same as above with --bands-drop-raw: raw bands dropped, keeping only the
+#                   13 derived indices (221 features) -- isolates whether the new indices pull
+#                   their weight without 170 raw-band columns along for the ride
+set -euo pipefail
+export PROJ_NETWORK=OFF
+export OMP_NUM_THREADS=1
+PY=/g/data/xe2/John/geospatenv/bin/python
+D=/scratch/xe2/cb8590/paddock-species-data/derived
+REPO=/home/147/cb8590/Projects/paddock-species
+cd $REPO/src/paddocks
+mkdir -p $REPO/output/arms/idx_arch_sweep
+
+KEEP=$D/keep_arms/keep_reviewed_SENSITIVE.csv
+TESTKEEP=$D/keep_arms/testkeep_temporal_SENSITIVE.csv
+COMMON="--labeled $D/nvt_trials_labeled.csv --keep $KEEP --test-keep $TESTKEEP \
+        --target group3 --importance-repeats 0"
+
+run () {   # run <name> <feature-args...>
+    local name=$1; shift
+    echo "=== arm: $name ==="
+    for model in hgb rf et logreg; do
+        echo "--- model: $model ---"
+        $PY train_species.py $COMMON --model $model "$@" \
+            --out $REPO/output/arms/idx_arch_sweep/${name}_${model}.md
+    done
+}
+
+run indices       --indices "$D/samgeo/ts_v2/*_SENSITIVE.csv"
+run bands         --bands "$D/samgeo/bands_ts/*_SENSITIVE.csv"
+run bands_idxonly --bands "$D/samgeo/bands_ts/*_SENSITIVE.csv" --bands-drop-raw
+
+echo "Done idx_arch_sweep"

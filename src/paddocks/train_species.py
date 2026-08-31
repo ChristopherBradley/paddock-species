@@ -36,6 +36,13 @@ import numpy as np
 import pandas as pd
 
 BIN_START, BIN_END, BIN_STEP = 90, 350, 20
+# The set of valid DOY-bin label strings, for family() to check trailing tokens against
+# directly rather than guessing from digit-length (see family()'s docstring: a digit-length
+# heuristic is wrong in BOTH directions -- "90" is a valid bin but only 2 digits, while band
+# names like nir_1/nir_2/swir_2/swir_3 end in a real digit that is NOT a bin and must not be
+# stripped). Every bin label is >=BIN_START=90, so it can never collide with a band's own
+# single-digit suffix (1/2/3).
+_BIN_LABELS = {str(e) for e in np.arange(BIN_START, BIN_END + BIN_STEP, BIN_STEP)[:-1]}
 BANDS = ["blue", "green", "red", "red_edge_1", "red_edge_2", "red_edge_3",
          "nir_1", "nir_2", "swir_2", "swir_3"]
 
@@ -67,15 +74,57 @@ def family(col):
     Splitting on the first underscore would merge `red_edge_1_290` into `red`, which is the
     one grouping that matters here: whether the red-edge bands (unavailable to the 3-index
     baseline) carry signal is the question this table exists to answer.
+
+    BUG FIXED 2026-08-31, TWICE (found by independent review, `INDEPENDENT_REVIEW_19index.md`
+    #1): this used to require the trailing digit token be exactly 3 characters, on the unstated
+    assumption every DOY bin label is 3 digits. `BIN_START=90` makes the first bin "90" -- 2
+    digits -- so every raw band's 90-bin column (e.g. `blue_90`) fell through to `else: base`
+    and survived `--bands-drop-raw`'s `family(c) in BANDS` filter. Confirmed as the cause of
+    "dropped 160" instead of 170 in every `--bands-drop-raw` run to date. The first attempt at a
+    fix just dropped the length check entirely (`parts[1].isdigit()`), which went too far the
+    OTHER way: band names that themselves end in a digit (`nir_1`, `nir_2`, `swir_2`, `swir_3`)
+    have their whole-season summary columns (`nir_1__amp`) misparsed too -- `"nir_1__amp".split
+    ("__")[0].rsplit("_",1)` is `["nir","1"]`, and "1".isdigit() is True, so the naive fix
+    returned "nir", not "nir_1", breaking the OPPOSITE direction (these stopped matching `BANDS`
+    at all and a real raw-band family silently vanished from --bands-drop-raw's drop list).
+    Confirmed by direct test: `family("nir_1__amp")` returned `"nir"` under the naive fix, not
+    `"nir_1"`. Fixed properly by checking membership in the actual bin-label set (`_BIN_LABELS`,
+    module level) instead of guessing from the token's shape -- a bin label is never confusable
+    with a band's own digit suffix because every real bin is >=90 and the band suffixes are 1-3.
+
+    Also strips a trailing `@source` tag (`main()`'s `f.add_suffix(f"@{name}")`, added when
+    multiple `--bands`/`--indices`/`--s1` sources are combined) before doing anything else --
+    without this, a bin-level column like `ndre2_230@bands` never matched `_BIN_LABELS` (the
+    trailing token was `"230@bands"`, not `"230"`) and every such column reported as its own
+    one-off pseudo-family in the permutation-importance table instead of aggregating into
+    `ndre2`. Found while reading `GROUP3_MODEL_shipped_plus_sharma6.md`'s importance table,
+    which combines --bands and --indices and was visibly not aggregating bin-level columns.
     """
+    col = col.split("@")[0]                          # multi-source suffix: `ndre2_230@bands`
     base = col.split("__")[0]                       # season summaries: `nir_1__amp`
     parts = base.rsplit("_", 1)
-    return parts[0] if len(parts) == 2 and parts[1].isdigit() and len(parts[1]) == 3 else base
+    return parts[0] if len(parts) == 2 and parts[1] in _BIN_LABELS else base
 
 
 def safe_ratio(a, b):
     d = a + b
     return np.where(np.abs(d) < 1e-6, np.nan, (a - b) / np.where(np.abs(d) < 1e-6, 1, d))
+
+
+# Every index add_indices() derives from the raw bands, kept as an explicit list (rather than
+# inferred from F.columns after the fact) so build_features() can give them the SAME whole-
+# season summary stats (p10/p90/amplitude/peak-DOY) the raw bands and the shipped 3-index model
+# already get. Before 2026-08-31 this list didn't exist and the summary loop only ran over
+# value_cols (the raw bands) — every derived index (ndvi/ndyi/cfi/ndre/ndwi/nbr/psri/swir_ratio)
+# silently got bin-level features only, MISSING peak-DOY, "the single most discriminating thing
+# about canola" per this same docstring three lines below. That means the existing bands-pathway
+# results (SPECIES_MODEL_bands.md's 274 features, SPECIES_MODEL_combined.md) understated every
+# derived index relative to the indices-pathway's 3 indices (which get full summary stats,
+# since they arrive as value_cols straight from the extraction-time index files) — a real, if
+# probably minor, asymmetry in that prior comparison, not something this fix is introducing.
+INDEX_NAMES = ["ndvi", "ndyi", "cfi", "ndre", "ndwi", "nbr", "psri", "swir_ratio",
+              "evi", "evi2", "savi", "gndvi", "cire",
+              "ndre2", "vi2", "vi3", "vdvi", "vci", "evi2_sharma"]
 
 
 def add_indices(F, bins):
@@ -89,7 +138,7 @@ def add_indices(F, bins):
         def g(name):
             return F.get(f"{name}_{b}", pd.Series(np.nan, index=F.index)).values
         red, green, blue = g("red"), g("green"), g("blue")
-        nir, re1, re3 = g("nir_1"), g("red_edge_1"), g("red_edge_3")
+        nir, re1, re2, re3 = g("nir_1"), g("red_edge_1"), g("red_edge_2"), g("red_edge_3")
         sw2, sw3 = g("swir_2"), g("swir_3")
         F[f"ndvi_{b}"] = safe_ratio(nir, red)
         F[f"ndyi_{b}"] = safe_ratio(green, blue)
@@ -100,6 +149,51 @@ def add_indices(F, bins):
         F[f"nbr_{b}"] = safe_ratio(nir, sw3)         # senescence / residue
         F[f"psri_{b}"] = np.where(np.abs(re3) < 1e-6, np.nan, (red - blue) / re3)
         F[f"swir_ratio_{b}"] = np.where(np.abs(sw3) < 1e-6, np.nan, sw2 / sw3)
+        # Added 2026-08-31 per PIPELINE_ARCHITECTURE_AND_TILING.md sec 2.1's flagged gap: the
+        # closest Australian precedents (Sharma et al. 2026, Al-Shammari et al. 2024) used
+        # EVI/EVI2/SAVI and a red-edge chlorophyll index alongside NDVI, none of which this
+        # project had computed or tried anywhere. GNDVI added too (Gitelson & Merzlyak 1998,
+        # standard "green NDVI") as a cheap, canonical complement to CFI's yellow/green focus.
+        # NDRE2/VDVI/VCI/Vi2/Vi3 were flagged as a follow-up on 2026-08-31 (MDPI blocked
+        # automated fetch of Sharma et al.'s formulas) and added below on 2026-08-31 once the
+        # user supplied the paper's Table S2 (exact formulas, not re-derived from memory).
+        evi_denom = nir + 6 * red - 7.5 * blue + 1
+        F[f"evi_{b}"] = np.where(np.abs(evi_denom) < 1e-6, np.nan,
+                                 2.5 * (nir - red) / evi_denom)          # Huete et al. 2002
+        evi2_denom = nir + 2.4 * red + 1
+        F[f"evi2_{b}"] = np.where(np.abs(evi2_denom) < 1e-6, np.nan,
+                                  2.5 * (nir - red) / evi2_denom)        # Jiang et al. 2008
+        savi_denom = nir + red + 0.5
+        F[f"savi_{b}"] = np.where(np.abs(savi_denom) < 1e-6, np.nan,
+                                  1.5 * (nir - red) / savi_denom)        # Huete 1988, L=0.5
+        F[f"gndvi_{b}"] = safe_ratio(nir, green)                        # Gitelson & Merzlyak 1998
+        F[f"cire_{b}"] = np.where(np.abs(re1) < 1e-6, np.nan, nir / re1 - 1)  # Gitelson et al. 2005
+
+        # Sharma et al. 2026 Table S2 (exact formulas, supplied by the user 2026-08-31 after
+        # MDPI blocked automated fetch). NDRE2 uses red-edge BAND 2 (740 nm), not band 1 like
+        # this file's existing `ndre` — Clevers & Gitelson 2013.
+        F[f"ndre2_{b}"] = safe_ratio(nir, re2)
+        # Vi2/Vi3 (Ashourloo et al. 2022): plain band-difference combinations, not ratios.
+        F[f"vi2_{b}"] = (re2 + red) - (re1 - blue)
+        F[f"vi3_{b}"] = (re1 + green) - (blue + red)
+        # VDVI (Xue & Su 2017 review; visible-bands-only, for when NIR is unreliable)
+        vdvi_denom = 2 * green + red + blue
+        F[f"vdvi_{b}"] = np.where(np.abs(vdvi_denom) < 1e-6, np.nan,
+                                  (2 * green - red - blue) / vdvi_denom)
+        # VCI (He et al. 2025): fractional-vegetation-cover index via a NIR-green reference
+        # reflectance R_N,G = alpha*(NIR-Green)+Green, alpha=0.38 for Sentinel-2 MSI (their value)
+        r_ng = 0.38 * (nir - green) + green
+        vci_denom = (r_ng - blue) ** 2
+        F[f"vci_{b}"] = np.where(np.abs(vci_denom) < 1e-6, np.nan,
+                                 (r_ng - red) ** 2 / vci_denom)
+        # Table S2's EVI2 = 2.4*(NIR-Red)/(NIR+Red+1.0) -- NOT the standard Jiang et al. 2008
+        # formula (2.5*(NIR-Red)/(NIR+2.4*Red+1)) already implemented above as `evi2` despite
+        # citing the same paper; kept as a separate feature rather than overwritten, both so the
+        # already-tested `evi2` stays reproducible and because this is worth testing as-published
+        # rather than "corrected" to what Jiang et al. actually wrote.
+        evi2s_denom = nir + red + 1.0
+        F[f"evi2_sharma_{b}"] = np.where(np.abs(evi2s_denom) < 1e-6, np.nan,
+                                         2.4 * (nir - red) / evi2s_denom)
     return F
 
 
@@ -125,12 +219,14 @@ def build_features(ts, value_cols, with_geo, lab, bin_step=None):
     F = piv
 
     bins = [str(e) for e in edges[:-1]]
+    summary_cols = list(value_cols)
     if set(BANDS).issubset(value_cols):
         F = add_indices(F, bins)
+        summary_cols += INDEX_NAMES   # give derived indices the same summary stats as raw bands
 
     # Whole-season shape, which the bins alone lose: how high it got, how much it moved, and
     # WHEN it peaked. Peak timing is the single most discriminating thing about canola.
-    for c in value_cols:
+    for c in summary_cols:
         have = [b for b in bins if f"{c}_{b}" in F.columns]
         if not have:
             continue
@@ -255,21 +351,22 @@ def evaluate(name, Xtr, ytr, Xte, yte, model, classes, f):
     return {"split": name, "macro_f1": macro, "bal_acc": bal}
 
 
-def save_confusion(Xtr, ytr, Xte, yte, model, classes, png, target):
-    """Confusion matrix as a heatmap — the archival record of what species-level got to.
+def plot_confusion(ytrue, pred, classes, png, title):
+    """Confusion matrix as a heatmap — the archival record of what a split got to.
 
     Row-normalised, because the classes are wildly imbalanced (wheat 835, lentil 81) and a
     raw-count image just shows which class is common. Counts are printed inside the cells so
-    nothing is hidden by the normalisation.
+    nothing is hidden by the normalisation. Takes already-computed predictions rather than
+    fitting a model itself, so the SAME plot serves a fresh temporal fit (`save_confusion`
+    below) and the spatial split's pooled out-of-fold predictions, which come from 5 different
+    fold-local models and have no single (Xtr, ytr, Xte, yte) to refit against.
     """
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from sklearn.metrics import confusion_matrix, f1_score
 
-    model.fit(Xtr, ytr)
-    pred = model.predict(Xte)
-    cm = confusion_matrix(yte, pred, labels=classes)
+    cm = confusion_matrix(ytrue, pred, labels=classes)
     row = cm.sum(1, keepdims=True)
     frac = np.divide(cm, row, out=np.zeros_like(cm, float), where=row > 0)
 
@@ -280,10 +377,9 @@ def save_confusion(Xtr, ytr, Xte, yte, model, classes, png, target):
     ax.set_yticks(range(n), classes)
     ax.set_xlabel("predicted")
     ax.set_ylabel("true")
-    macro = f1_score(yte, pred, average="macro", labels=classes, zero_division=0)
-    ax.set_title(f"{target}: temporal transfer (train <=2022, test 2023-24)\n"
-                 f"macro F1 {macro:.3f}, chance {1/n:.3f} — row-normalised, counts in cells",
-                 fontsize=10)
+    macro = f1_score(ytrue, pred, average="macro", labels=classes, zero_division=0)
+    ax.set_title(f"{title}\nmacro F1 {macro:.3f}, chance {1/n:.3f} — "
+                 "row-normalised, counts in cells", fontsize=10)
     for i in range(n):
         for j in range(n):
             if cm[i, j]:
@@ -295,6 +391,14 @@ def save_confusion(Xtr, ytr, Xte, yte, model, classes, png, target):
     fig.savefig(png, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"confusion heatmap -> {png}")
+
+
+def save_confusion(Xtr, ytr, Xte, yte, model, classes, png, target):
+    """Fit fresh and plot the TEMPORAL split's confusion matrix (see `plot_confusion`)."""
+    model.fit(Xtr, ytr)
+    pred = model.predict(Xte)
+    plot_confusion(yte, pred, classes, png,
+                   f"{target}: temporal transfer (train <=2022, test 2023-24)")
 
 
 def main():
@@ -333,7 +437,20 @@ def main():
                     help=f"DOY bin width in days (default {BIN_STEP}). Narrower resolves the "
                          "flowering peak more sharply and leaves more bins empty on a cloudy "
                          "paddock; which way that trades has never been measured here")
-    ap.add_argument("--model", choices=["hgb", "rf"], default="hgb")
+    ap.add_argument("--model", choices=["hgb", "rf", "et", "logreg"], default="hgb",
+                    help="hgb (default, shipped model): hist gradient boosting. rf: random "
+                         "forest. et: extra-trees (more randomised splits than rf, often more "
+                         "robust to noisy/redundant features — relevant now that the feature "
+                         "set is growing). logreg: L2 logistic regression, a linear baseline "
+                         "to check whether the boosted trees' non-linearity is earning its "
+                         "complexity on this dataset. Added 2026-08-31; xgboost/lightgbm were "
+                         "considered too (xgboost isn't installed and lightgbm's install in "
+                         "this shared geospatenv is broken — a dask import crashes on Python "
+                         "3.11 — so neither is available without touching a colleague's shared "
+                         "env, which this task doesn't do). A deep model was deliberately not "
+                         "added either: already measured on this dataset that label volume, "
+                         "not architecture, is the binding constraint (train_species.py top-of"
+                         "-file docstring), so a neural net would not relax it.")
     ap.add_argument("--seed", type=int, default=0,
                     help="model random_state. Vary it to separate a real feature effect "
                          "from boosting noise: the S1 gain moved from +0.044 to +0.029 "
@@ -359,6 +476,29 @@ def main():
                          "took >90 min on a 4-CPU PBS job.")
     ap.add_argument("--confusion-png", help="write the temporal-split confusion matrix as a "
                                             "heatmap figure (row-normalised)")
+    ap.add_argument("--spatial-confusion-png", help="write the spatial-split (GroupKFold on "
+                                                    "site) confusion matrix as a heatmap "
+                                                    "figure, from the pooled out-of-fold "
+                                                    "predictions across all 5 folds")
+    ap.add_argument("--bands-drop-raw", action="store_true",
+                    help="with --bands: after build_features() derives its indices from the "
+                         "binned band medians, drop the raw band feature columns and keep only "
+                         "the derived indices. Isolates 'derived indices computed from bands' "
+                         "as its own arm (mirrors the existing bands/indices/combined 3-way "
+                         "comparison, now over the expanded index set added 2026-08-31) without "
+                         "a separate code path for it.")
+    ap.add_argument("--bands-keep-families", nargs="*", default=None,
+                    help="with --bands: after build_features(), keep ONLY these derived-index "
+                         "families (raw bands and every other family dropped, regardless of "
+                         "--bands-drop-raw). Generalizes --bands-drop-raw to a named subset --"
+                         "added 2026-08-31 (independent review, `INDEPENDENT_REVIEW_19index.md` "
+                         "#2) to let a specific index set (e.g. Sharma et al. 2026's 6) be "
+                         "joined onto --indices' own 3 shipped indices, so the comparison is "
+                         "against what the shipped model ACTUALLY computes (per-pixel-index-"
+                         "then-median from the extraction-time index files) rather than only "
+                         "ever against the bands-pathway 'orig8' arm, which bundles in 5 index "
+                         "families the shipped model never had plus a different (band-median-"
+                         "then-index) computation of ndvi/ndyi/cfi.")
     ap.add_argument("--select-k", type=int, default=0,
                     help="keep only the K best features (ANOVA F), selected INSIDE each "
                          "training fold. Use to test whether a richer feature set loses to a "
@@ -418,6 +558,18 @@ def main():
             t = t[t.TrialCode.isin(keep)]
         t = t[t.TrialCode.isin(keep_obs)]
         f = build_features(t, cols, False, lab, args.bin_step)
+        if name == "bands" and args.bands_keep_families is not None:
+            keep_fams = set(args.bands_keep_families)
+            keep_cols = [c for c in f.columns if family(c) in keep_fams]
+            dropped = f.shape[1] - len(keep_cols)
+            f = f[keep_cols]
+            print(f"--bands-keep-families {sorted(keep_fams)}: dropped {dropped} other columns, "
+                  f"{f.shape[1]} columns remain")
+        elif name == "bands" and args.bands_drop_raw:
+            raw_cols = [c for c in f.columns if family(c) in BANDS]
+            f = f.drop(columns=raw_cols)
+            print(f"--bands-drop-raw: dropped {len(raw_cols)} raw-band columns, "
+                  f"{f.shape[1]} derived-index columns remain")
         if len(sources) > 1:
             f = f.add_suffix(f"@{name}")
         (s1_parts if name == "s1" else parts).append(f)
@@ -471,10 +623,22 @@ def main():
     print(f"feature matrix {X.shape}, {len(classes)} classes")
 
     def mk():
+        needs_impute = args.model in ("rf", "et", "logreg")
         if args.model == "rf":
             clf = RandomForestClassifier(n_estimators=500, min_samples_leaf=2,
                                          class_weight="balanced_subsample",
                                          n_jobs=-1, random_state=args.seed)
+        elif args.model == "et":
+            from sklearn.ensemble import ExtraTreesClassifier
+            clf = ExtraTreesClassifier(n_estimators=500, min_samples_leaf=2,
+                                       class_weight="balanced_subsample",
+                                       n_jobs=-1, random_state=args.seed)
+        elif args.model == "logreg":
+            from sklearn.linear_model import LogisticRegression
+            from sklearn.preprocessing import StandardScaler
+            clf = make_pipeline(StandardScaler(),
+                                LogisticRegression(max_iter=2000, class_weight="balanced",
+                                                   random_state=args.seed))
         else:
             clf = HistGradientBoostingClassifier(max_iter=400, learning_rate=0.06,
                                                  class_weight="balanced", random_state=args.seed)
@@ -487,7 +651,7 @@ def main():
             # so compare --select-k runs only against other --select-k runs.
             return make_pipeline(SimpleImputer(strategy="median"),
                                  SelectKBest(f_classif, k=min(args.select_k, X.shape[1])), clf)
-        if args.model == "rf":
+        if needs_impute:
             return make_pipeline(SimpleImputer(strategy="median"), clf)
         return clf
 
@@ -498,7 +662,9 @@ def main():
         f.write(f"- input: **{'10 bands' if args.bands else '3 indices'}** "
                 f"({len(value_cols)} columns), {X.shape[0]} paddocks, "
                 f"{X.shape[1]} features, {len(classes)} classes\n")
-        f.write(f"- model: {'random forest' if args.model=='rf' else 'hist gradient boosting'}"
+        model_names = {"rf": "random forest", "et": "extra-trees",
+                      "logreg": "logistic regression", "hgb": "hist gradient boosting"}
+        f.write(f"- model: {model_names[args.model]}"
                 f", class-balanced; geography "
                 f"{'INCLUDED' if args.with_geo else 'excluded'}\n")
         f.write(f"- class counts: " +
@@ -555,6 +721,9 @@ def main():
         ys, ps = y[scorable], preds.astype(str)[scorable]
         macro = f1_score(ys, ps, average="macro")
         bal = balanced_accuracy_score(ys, ps)
+        if args.spatial_confusion_png:
+            plot_confusion(ys, ps, classes, args.spatial_confusion_png,
+                           f"{args.target}: spatial transfer (5-fold GroupKFold on site)")
         f.write("\n### Spatial transfer — 5-fold GroupKFold on site\n\n")
         f.write(f"- **macro F1 {macro:.3f}, balanced accuracy {bal:.3f}**"
                 f"{f' (scored on {len(ys)} fixed rows)' if args.test_keep else ''}\n\n")
