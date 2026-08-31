@@ -40,6 +40,8 @@ import numpy as np
 import pandas as pd
 from sklearn.model_selection import StratifiedKFold
 
+from train_species import GROUP  # Canola/Wheat/Barley/.../Lupin -> Canola/Cereal/Legume
+
 AMP_THRESHOLD = 0.35   # the current production --crop-gate-amp, for a like-for-like comparison
 TARGET_RECALL = 0.916  # the current gate's own headline recall, PRESENCE_ONLY_LABELS.md
 
@@ -126,6 +128,50 @@ def fit_gate(feat, target_recall, cols):
     return best  # loosest (highest-p) threshold that still clears target_recall, or None
 
 
+def crop_recall_table(feat, thr, groups, amp_col="amp", amp_threshold=AMP_THRESHOLD):
+    """Recall of `feat` passing `thr` (shape gate) and, for comparison, the amplitude gate,
+    split by the trial's own crop group. `groups` is a Series of TrialCode -> Canola/Cereal/
+    Legume. Exploratory only — evaluated on the full population, not cross-validated, exactly
+    like the "what the deployable shape gate adds beyond amplitude" section above.
+    """
+    shape_pass = pd.Series(np.all([feat[c].fillna(-np.inf) >= thr[c] for c in thr], axis=0),
+                            index=feat.index)
+    amp_pass = feat[amp_col] >= amp_threshold
+    g = groups.reindex(feat.index)
+    rows = []
+    for grp in ["Canola", "Cereal", "Legume"]:
+        idx = g.index[g == grp]
+        if len(idx) == 0:
+            continue
+        rows.append((grp, len(idx), float(shape_pass.loc[idx].mean()),
+                     float(amp_pass.loc[idx].mean())))
+    return rows
+
+
+def two_pass_recall(feat, thr, groups, exempt_groups, amp_col="amp",
+                     amp_threshold=AMP_THRESHOLD):
+    """Recall under a two-pass rule: trials whose own crop group is in `exempt_groups` need
+    only clear the amplitude gate; every other trial needs both amplitude AND shape. This is
+    the local, presence-only proxy for `predict_tile.py --shape-gate-skip-classes` — it uses
+    the trial's TRUE crop group as a stand-in for the classifier's predicted class, which is
+    the same substitution `crop_recall_table` above already makes.
+    """
+    shape_pass = pd.Series(np.all([feat[c].fillna(-np.inf) >= thr[c] for c in thr], axis=0),
+                            index=feat.index)
+    amp_pass = feat[amp_col] >= amp_threshold
+    g = groups.reindex(feat.index)
+    exempt = g.isin(exempt_groups)
+    passed = np.where(exempt.values, amp_pass.values, (amp_pass & shape_pass).values)
+    passed = pd.Series(passed, index=feat.index)
+    rows = [("pooled", len(g), float(passed.mean()))]
+    for grp in ["Canola", "Cereal", "Legume"]:
+        idx = g.index[g == grp]
+        if len(idx) == 0:
+            continue
+        rows.append((grp, len(idx), float(passed.loc[idx].mean())))
+    return rows
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -137,6 +183,22 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", required=True)
     ap.add_argument("--model-out", default=None, help="optional: save fitted thresholds as joblib")
+    ap.add_argument("--senescence-slack-pct", type=float, default=0.0,
+                    help="EXPERIMENTAL, PHENOLOGY_GATE.md 'Next step' #1. Loosens the "
+                         "senescence_drop threshold specifically (greenup_rise left at its "
+                         "fitted value) by this many percentile points, e.g. 10. 0 = off. "
+                         "Reported on the full deployable population only (not cross-"
+                         "validated) — this is a recall trade-off number, not an area-ratio "
+                         "one; that needs a regional rerun with --model-out-loose.")
+    ap.add_argument("--model-out-loose", default=None,
+                    help="optional: save the --senescence-slack-pct bundle as joblib, wireable "
+                         "into predict_tile.py --crop-gate-shape same as --model-out")
+    ap.add_argument("--two-pass-canola", action="store_true",
+                    help="EXPERIMENTAL, PHENOLOGY_GATE.md 'Next step' #2. Reports recall under "
+                         "a two-pass rule: Canola trials pass on the amplitude gate alone; "
+                         "Cereal/Legume trials need both gates. No new model bundle needed — "
+                         "this is what predict_tile.py --shape-gate-skip-classes Canola does "
+                         "with the existing --model-out bundle.")
     args = ap.parse_args()
 
     ts = load_ts(args.indices)
@@ -196,10 +258,133 @@ def main():
         full_fit = fit_gate(feat, TARGET_RECALL, ["greenup_rise", "senescence_drop"])
         final_thr = ({c: round(v, 4) for c, v in full_fit[1].items()} if full_fit
                      else {c: float(np.mean([t[c] for t in thresholds])) for c in thresholds[0]})
-        return mean_recall, final_thr, fold_recalls, float(np.mean(fold_amp_recalls))
+        final_p = full_fit[0] if full_fit else None
+        return mean_recall, final_thr, fold_recalls, float(np.mean(fold_amp_recalls)), final_p
 
-    oracle_recall, oracle_thr, oracle_folds, oracle_amp = evaluate(feat_oracle, args.seed)
-    deploy_recall, deploy_thr, deploy_folds, deploy_amp = evaluate(feat_deploy, args.seed)
+    oracle_recall, oracle_thr, oracle_folds, oracle_amp, _ = evaluate(feat_oracle, args.seed)
+    deploy_recall, deploy_thr, deploy_folds, deploy_amp, deploy_p = evaluate(feat_deploy, args.seed)
+
+    # ---- crop-group join: needed for the per-crop recall table and the two experimental
+    # variants below. Trial-level, so this is exact, not inferred from a classifier. ----
+    groups = lab_idx["crop"].map(GROUP).dropna()
+    crop_rows = crop_recall_table(feat_deploy, deploy_thr, groups)
+    med_senesc = {grp: float(feat_deploy.loc[groups.reindex(feat_deploy.index) == grp,
+                                             "senescence_drop"].median())
+                  for grp, n, _, _ in crop_rows}
+
+    crop_lines = [
+        "",
+        "## Recall by crop",
+        "",
+        "Same deployable-variant population and baseline threshold, split by the trial's own "
+        "crop group (not cross-validated — exploratory, same status as the table above):",
+        "",
+        "| group | n | shape recall | amplitude recall |",
+        "|---|---|---|---|",
+    ] + [f"| **{grp}** | {n} | {r:.1%} | {a:.1%} |" for grp, n, r, a in crop_rows] + [
+        "",
+        f"Median `senescence_drop`: " + ", ".join(f"{g} {v:.3f}" for g, v in med_senesc.items())
+        + ". A single shared threshold screens out disproportionately more of whichever crop "
+        "senesces least sharply post-flowering by this metric.",
+    ]
+
+    exp_lines = []
+    if args.senescence_slack_pct > 0 and deploy_p is not None:
+        p_loose = max(1.0, deploy_p - args.senescence_slack_pct)
+        senescence_loose = round(float(np.nanpercentile(feat_deploy["senescence_drop"], p_loose)), 4)
+        thr_loose = dict(deploy_thr)
+        thr_loose["senescence_drop"] = senescence_loose
+        loose_rows = crop_recall_table(feat_deploy, thr_loose, groups)
+        pooled_loose = float(np.all(
+            [feat_deploy[c].fillna(-np.inf) >= thr_loose[c] for c in thr_loose], axis=0).mean())
+        exp_lines += [
+            "",
+            f"## Experimental: a looser senescence_drop threshold "
+            f"(slack {args.senescence_slack_pct:.0f} pts)",
+            "",
+            f"`senescence_drop` loosened from the {deploy_p:.1f}th to the {p_loose:.1f}th "
+            f"percentile ({deploy_thr['senescence_drop']:.3f} -> {senescence_loose:.3f}); "
+            f"`greenup_rise` unchanged at {deploy_thr['greenup_rise']:.3f}. Full-population, "
+            "not cross-validated — a recall trade-off number, not an area-ratio one.",
+            "",
+            "| group | n | shape recall (loosened) | shape recall (baseline) |",
+            "|---|---|---|---|",
+        ] + [f"| **{grp}** | {n} | {r:.1%} | {b:.1%} |"
+             for (grp, n, r, _), (_, _, b, _) in zip(loose_rows, crop_rows)] + [
+            "",
+            f"Pooled recall: **{pooled_loose:.1%}** (baseline {deploy_recall:.1%}). Whether "
+            "this actually helps still needs the regional ABS re-run — loosening lets more "
+            "real crop through, and by the same mechanism lets back some of the excess land "
+            "the baseline gate was rejecting.",
+        ]
+        if args.model_out_loose:
+            import joblib as _joblib
+            _joblib.dump({
+                "variant": "deployable_peak_anchored_loose_senescence",
+                "thresholds": thr_loose,
+                "cols": list(thr_loose.keys()),
+                "base_percentile": deploy_p, "loosened_percentile": p_loose,
+                "senescence_slack_pct": args.senescence_slack_pct,
+                "target_recall": TARGET_RECALL,
+                "held_out_recall_baseline": deploy_recall,
+                "full_population_recall": pooled_loose,
+                "n_train": len(feat_deploy),
+                "pre_window_days": [120, 30],
+                "post_window_days": [45, 150],
+            }, args.model_out_loose)
+            exp_lines.append(f"\nSaved: `{args.model_out_loose}`")
+
+    if args.two_pass_canola:
+        tp_rows = two_pass_recall(feat_deploy, deploy_thr, groups, {"Canola"})
+        exp_lines += [
+            "",
+            "## Experimental: two-pass gating (Canola exempted from the shape gate)",
+            "",
+            "Canola trials pass on the amplitude gate alone; Cereal/Legume trials need both "
+            "gates (baseline thresholds, unchanged). Full-population, not cross-validated — "
+            "uses each trial's TRUE crop group as the stand-in for the classifier's predicted "
+            "class, the same substitution the table above makes.",
+            "",
+            "| | n | recall |",
+            "|---|---|---|",
+        ] + [f"| **{grp}** | {n} | {r:.1%} |" for grp, n, r in tp_rows] + [
+            "",
+            "No new model bundle needed — this is `predict_tile.py --shape-gate-skip-classes "
+            "Canola` against the existing `--model-out` bundle. What this cannot show "
+            "locally: whether exempting Canola from the shape gate lets non-crop land that "
+            "the classifier mis-calls Canola back onto the map — that risk only shows up in "
+            "the regional ABS re-run, same as the area-ratio number always has.",
+        ]
+
+    have_loose = args.senescence_slack_pct > 0 and deploy_p is not None
+    if have_loose or args.two_pass_canola:
+        # ---- the number that actually ships: amplitude AND shape together, not shape alone.
+        # `predict_tile.py`'s two gates are stacked (either failing aborts the polygon), so the
+        # "shape recall" tables above overstate what a reader gets in production; this is the
+        # apples-to-apples comparison across whichever fix(es) were requested this run. ----
+        configs = [("baseline (shipped)", deploy_thr, set())]
+        if have_loose:
+            configs.append((f"loosened senescence (-{args.senescence_slack_pct:.0f} pts)",
+                            thr_loose, set()))
+        if args.two_pass_canola:
+            configs.append(("two-pass (Canola exempt)", deploy_thr, {"Canola"}))
+        stacked = {name: two_pass_recall(feat_deploy, thr, groups, exempt)
+                   for name, thr, exempt in configs}
+        exp_lines += [
+            "",
+            "## Stacked with amplitude — the number that actually ships",
+            "",
+            "`predict_tile.py` applies `--crop-gate-amp` and `--crop-gate-shape` together "
+            "(either failing aborts the polygon), so this is the recall a reader of the map "
+            "actually gets, not the shape-gate-alone number the tables above report:",
+            "",
+            "| config | pooled | Canola | Cereal | Legume |",
+            "|---|---|---|---|---|",
+        ] + [
+            "| " + name + " | " + " | ".join(
+                f"{r:.1%}" for _, _, r in rows) + " |"
+            for name, rows in stacked.items()
+        ]
 
     # ---- what the deployable shape gate adds beyond amplitude, on the same positives ----
     shape_pass = np.all([feat_deploy[c] >= deploy_thr[c] for c in deploy_thr], axis=0)
@@ -279,6 +464,7 @@ def main():
         f"gate being stricter); on sown-but-not-harvested land the amplitude gate over-admits, "
         f"and the same mechanism should reject more of it — untested here, because that "
         f"population has no clean label left in this repo (see the AgriWebb removal).",
+    ] + crop_lines + exp_lines + [
         "",
         "## Next step to close out the NEXT_STEPS.md §6.2 criterion",
         "",
@@ -288,7 +474,26 @@ def main():
         "validation region (the 100 km Riverina block already has 9 years of ground truth) with "
         "it enabled, and re-score with `abs_compare.py`. Only if the area ratio moves toward 1.0 "
         "*while* this recall number holds does §6.2's bar get cleared.",
-    ]
+    ] + ([
+        "",
+        "**A correction, found while adding the tables above.** The regional test's headline "
+        "canola number (83.4%) was the shape gate measured alone; `predict_tile.py` always "
+        "stacks it with the amplitude gate, and stacked, canola's real presence recall under "
+        "the shipped (rejected) shape-gate config is **78.3%**, not 83.4% — the canola-"
+        "undercount problem the regional test found was understated, not overstated, by the "
+        "verdict already on record in this file and in `NEXT_STEPS.md` §4.",
+        "",
+        "**Of the two untried fixes, two-pass gating is the stronger local result**: it "
+        "restores Canola to its amplitude-only recall (94.5%, vs. 78.3% baseline and 87.6% "
+        "for the best achievable senescence-loosening) with zero effect on Cereal or Legume, "
+        "because it does not touch their thresholds at all. Loosening `senescence_drop` tops "
+        "out at 87.6% for Canola — the percentile search this gate uses (1st-40th) is "
+        "already at its floor by slack 3, so a looser number is not reachable this way without "
+        "changing the fitting method itself. Neither number is validated against the ABS area "
+        "ratio yet; both need the regional rerun `run_map100.sh predict-shapegate-twopass` / "
+        "`predict-shapegate-loose` now provide, each ~120 SU on the existing 9-year Riverina "
+        "segmentation, before either is a candidate to ship.",
+    ] if (have_loose or args.two_pass_canola) else [])
     with open(args.out, "w") as f:
         f.write("\n".join(lines) + "\n")
     print("\n".join(lines))

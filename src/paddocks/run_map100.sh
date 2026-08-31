@@ -25,6 +25,9 @@
 #   ./run_map100.sh sam        # ~6 GPU jobs, after presegment
 #   ./run_map100.sh status     # how far it has got
 #   ./run_map100.sh predict    # inference, once the abstain path is settled
+#   ./run_map100.sh predict-shapegate          # baseline shape gate, PHENOLOGY_GATE.md
+#   ./run_map100.sh predict-shapegate-twopass  # + Canola exempted, 'Next step' #2
+#   ./run_map100.sh predict-shapegate-loose    # loosened senescence_drop, 'Next step' #1
 #   ./run_map100.sh stability  # year-to-year polygon agreement (20 jobs), then `stability-merge`
 #   ./run_map100.sh stability-merge
 set -euo pipefail
@@ -123,6 +126,30 @@ OUT=$M/pred_shapegate/${b}.gpkg,EXTRA_ARGS="--max-area-ha 300 --crop-gate-amp 0.
              -N prs_$b predict_tile.pbs
     done
     ;;
+predict-shapegate-twopass)
+    # PHENOLOGY_GATE.md 'Next step' #2: same shape-gate model, but Canola predictions are
+    # exempted from it (amplitude gate only) -- the shape gate's canola-specific recall
+    # shortfall (83.4% vs cereal/legume ~95%) should not cost canola while it is still doing
+    # its job filtering excess Cereal/Legume land. Separate output dir, same segmentation.
+    mkdir -p $M/pred_shapegate_twopass
+    for f in $CH/p*.csv; do
+        b=$(basename "$f" .csv)
+        qsub -l mem=8GB -v AOIS="$f",POLYDIR=$POLY,MODEL=$D/models/group3_map.joblib,\
+OUT=$M/pred_shapegate_twopass/${b}.gpkg,EXTRA_ARGS="--max-area-ha 300 --crop-gate-amp 0.35 --crop-gate-shape $D/models/phenology_gate.joblib --shape-gate-skip-classes Canola" \
+             -N prtp_$b predict_tile.pbs
+    done
+    ;;
+predict-shapegate-loose)
+    # PHENOLOGY_GATE.md 'Next step' #1: a phenology_gate_loose.joblib fit with
+    # --senescence-slack-pct (see phenology_gate.py), applied to every class alike.
+    mkdir -p $M/pred_shapegate_loose
+    for f in $CH/p*.csv; do
+        b=$(basename "$f" .csv)
+        qsub -l mem=8GB -v AOIS="$f",POLYDIR=$POLY,MODEL=$D/models/group3_map.joblib,\
+OUT=$M/pred_shapegate_loose/${b}.gpkg,EXTRA_ARGS="--max-area-ha 300 --crop-gate-amp 0.35 --crop-gate-shape $D/models/phenology_gate_loose.joblib" \
+             -N prl_$b predict_tile.pbs
+    done
+    ;;
 stability)
     mkdir -p $M/stability
     # 20 shards: ~9 CPU-hours of GeoPackage opening split into ~27 min each. See stability.pbs
@@ -140,5 +167,5 @@ stability-merge)
         --report $REPO/output/POLYGON_STABILITY.md
     ;;
 *)
-    echo "usage: $0 {aois|presegment|sam|status|predict|predict-shapegate|stability|stability-merge}" >&2; exit 2 ;;
+    echo "usage: $0 {aois|presegment|sam|status|predict|predict-shapegate|predict-shapegate-twopass|predict-shapegate-loose|stability|stability-merge}" >&2; exit 2 ;;
 esac

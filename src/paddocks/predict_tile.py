@@ -181,6 +181,13 @@ def main():
                          "presence recall (output/PHENOLOGY_GATE.md) — do not make this the "
                          "production default without that check. Stacks with --crop-gate-amp "
                          "if both are given; either failing sets abstain_reason.")
+    ap.add_argument("--shape-gate-skip-classes", nargs="+", default=[],
+                    help="EXPERIMENTAL, PHENOLOGY_GATE.md 'Next step' #2 (two-pass gating). "
+                         "Predicted classes (e.g. Canola) exempted from --crop-gate-shape -- "
+                         "they still need --crop-gate-amp, just not the stricter shape check. "
+                         "Motivated by the shape gate's canola-specific recall shortfall "
+                         "(83.4% vs cereal 95.1%/legume 95.5%, PHENOLOGY_GATE.md). No effect "
+                         "unless --crop-gate-shape is also given.")
     ap.add_argument("--doy", nargs=2, type=int, default=[90, 350], metavar=("START", "END"),
                     help="read only this day-of-year window, overriding the AOI's start/end. "
                          "Defaults to the exact span `build_features` bins over, which is also "
@@ -388,6 +395,13 @@ def main():
             pred = np.where(fails.values, None, pred)
         if shape_pass is not None:
             fails_shape = ~shape_pass.reindex(F.index).fillna(False).values
+            if args.shape_gate_skip_classes:
+                # Two-pass gating (PHENOLOGY_GATE.md 'Next step' #2): a polygon already
+                # classified into an exempt class (by amplitude-gated argmax, above) is not
+                # subjected to the stricter shape check at all -- `pred` still holds that
+                # class here, since only fails_shape/amp have touched it so far.
+                exempt = np.isin(pred.astype(object), args.shape_gate_skip_classes)
+                fails_shape = fails_shape & ~exempt
             # Do not overwrite an existing reason (area/amplitude already explains the abstain).
             blank = g["abstain_reason"] == ""
             g.loc[blank & fails_shape, "abstain_reason"] = "no_crop_shape"
