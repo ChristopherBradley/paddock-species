@@ -29,10 +29,17 @@ end) so a killed job still leaves usable benchmark data — the Stage-2 lesson.
 
 KNOWN FAILURE, NOT OURS: the DEA archive contains occasional ZERO-BYTE tiles (seen on the
 1,362-AOI run: `ga_s2bm_oa_3-2-1_54HWH_2022-01-23_final_fmask.tif`, 0 bytes, dated Jul 2022).
-dc.load then raises "not recognized as a supported file format" and the whole AOI fails,
-reproducibly. Per-AOI exception handling keeps the rest of the batch alive; the fix for the
-affected AOI is to narrow --start/--end past the bad date, which costs nothing when the bad
-scene is outside the flowering window. Worth reporting to the NCI/DEA helpdesk.
+dc.load then raises "not recognized as a supported file format". Originally documented here as
+a per-AOI failure to work around manually (narrow --start/--end past the bad date); found
+2026-09-07 that this is what silently stalled the LAST 753 tiles of the national2022 run for
+its entire duration — every repair attempt failed 100% of its AOIs against this same file (plus
+a second one, `50JNR` on the same date), and nothing distinguished it from a transient
+connection error until the logs were read directly. `build_image` (below) now passes
+`skip_broken_datasets=True` to dc.load, which skips only the broken dataset and keeps every
+other scene, so a bad file anywhere in the year costs one scene, not the whole tile. Worth
+reporting to the NCI/DEA helpdesk regardless — this class of failure has real time-waste cost
+(see MEMORY.md, `dea-archive-corrupt-scenes-silently-fail-aoi.md`) and won't be caught by exit
+status alone.
 
 NOTE ON AREA UNITS: PaddockTS computes `area_ha = pol.area/1000`. In an equal-area CRS
 `.area` is m², so hectares are `/10000` — that expression is 10x too large, which makes the
@@ -153,6 +160,18 @@ def build_image(lat, lon, half_m, start, end, out_tif, resolution=10):
     # degree box whose ground width changes with latitude.
     pt = geometry.point(lon, lat, geometry.CRS("EPSG:4326")).to_crs(geometry.CRS("EPSG:3577"))
     cx, cy = pt.points[0]
+    # skip_broken_datasets=True: without it, ONE corrupt scene anywhere in the time range (GA
+    # occasionally ships a zero-byte ARD tile — see the module docstring) raises "not recognized
+    # as a supported file format" and fails the ENTIRE AOI, discarding every other good scene.
+    # Found 2026-09-07 re-running `repair` on national2022's last 753 tiles: all 4 repair jobs
+    # reported 0/754 built, every failure tracing to the same two files (`54HWH`/`50JNR`, both
+    # dated 2022-01-23, both 0 bytes on disk since Jul 2022) — a permanent archive defect, not
+    # the transient connection issue this same tile subset hit on 2026-09-04. An earlier version
+    # of this fix hand-rolled a find_datasets+exclude-and-retry loop, but it dropped x=/y=/crs=
+    # from the retry's dc.load call, which loads the FULL ~100km scene extent rather than the
+    # 3km AOI window when no spatial query is given — instant 4GB OOM on a single test tile.
+    # datacube 1.8.17 already has the right primitive for this (confirmed via
+    # inspect.signature): it skips only the broken dataset, keeping the query/windowing intact.
     ds = dc.load(
         product=["ga_s2am_ard_3", "ga_s2bm_ard_3", "ga_s2cm_ard_3"],
         x=(cx - half_m, cx + half_m), y=(cy - half_m, cy + half_m), crs="EPSG:3577",
@@ -161,6 +180,7 @@ def build_image(lat, lon, half_m, start, end, out_tif, resolution=10):
         output_crs="EPSG:6933",           # equal-area, as PaddockTS uses
         resolution=(-resolution, resolution),
         group_by="solar_day",
+        skip_broken_datasets=True,
     )
     if ds.sizes.get("time", 0) == 0:
         raise RuntimeError("no Sentinel-2 scenes for this AOI/time range")
