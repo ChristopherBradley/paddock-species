@@ -84,7 +84,11 @@ def main():
     T = T[ok]
     big = W[W.abs_crop_ha >= args.min_abs_ha].index
     T = T[[k in set(big) for k in zip(T.SA2_CODE21, T.year)]]
-    cls = T[T.pred.notna() & T.pred.isin(CROPS)].copy()
+    # abstain_reason, not pred, is authoritative for "cleanly classified" -- see
+    # predict_tile.py's shape-gate comment (2026-09-07): a --shape-gate-skip-classes class can
+    # carry a non-null pred alongside a non-empty abstain_reason, so pred.notna() alone would
+    # wrongly count a gate-failed polygon as clean.
+    cls = T[(T.abstain_reason.fillna("") == "") & T.pred.isin(CROPS)].copy()
     print(f"{len(T):,} polygon-years in censused cropping SA2s; {len(cls):,} classified")
 
     base = score_rows(cls, W, key)

@@ -88,9 +88,18 @@ def main():
     # Resolved by AREA, not by count: the class holding the most hectares that year wins, and
     # the confidence is the area-weighted mean. Taking the first row instead would let a 2 ha
     # sliver overrule the 40 ha paddock it was cut from.
-    d = T[["paddock_id", "year", "pred", "confidence", "area_ha"]].dropna(subset=["paddock_id"])
+    keep_cols = ["paddock_id", "year", "pred", "confidence", "area_ha"]
+    has_abstain = "abstain_reason" in T.columns
+    if has_abstain:
+        keep_cols.append("abstain_reason")
+    d = T[keep_cols].dropna(subset=["paddock_id"])
     n_split = int((d.groupby(["paddock_id", "year"]).size() > 1).sum())
-    by_class = (d[d.pred.notna()].groupby(["paddock_id", "year", "pred"])
+    # abstain_reason, not pred, is authoritative for "cleanly classified" -- see
+    # predict_tile.py's shape-gate comment (2026-09-07): a --shape-gate-skip-classes class can
+    # carry a non-null pred alongside a non-empty abstain_reason. Falls back to pred.notna()
+    # only if this attrs export predates the abstain_reason column.
+    clean = (d.abstain_reason.fillna("") == "") if has_abstain else d.pred.notna()
+    by_class = (d[clean].groupby(["paddock_id", "year", "pred"])
                  .agg(ha=("area_ha", "sum"), conf=("confidence", "mean")).reset_index())
     win = by_class.sort_values("ha").groupby(["paddock_id", "year"]).tail(1)
     crop = win.pivot(index="paddock_id", columns="year", values="pred")

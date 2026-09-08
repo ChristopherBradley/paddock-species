@@ -108,7 +108,7 @@ predict)
     # output/PRESENCE_ONLY_LABELS.md for why the Grazing class is retired.
     for f in $CH/p*.csv; do
         b=$(basename "$f" .csv)
-        qsub -l mem=8GB -v AOIS="$f",POLYDIR=$POLY,MODEL=$D/models/group3_map.joblib,\
+        qsub -l mem=8GB -v AOIS="$f",POLYDIR=$POLY,MODEL=$D/models/group3_map_sharma6.joblib,\
 OUT=$M/pred/${b}.gpkg,EXTRA_ARGS="--max-area-ha 300 --crop-gate-amp 0.35" \
              -N pr_$b predict_tile.pbs
     done
@@ -121,7 +121,7 @@ predict-shapegate)
     mkdir -p $M/pred_shapegate
     for f in $CH/p*.csv; do
         b=$(basename "$f" .csv)
-        qsub -l mem=8GB -v AOIS="$f",POLYDIR=$POLY,MODEL=$D/models/group3_map.joblib,\
+        qsub -l mem=8GB -v AOIS="$f",POLYDIR=$POLY,MODEL=$D/models/group3_map_sharma6.joblib,\
 OUT=$M/pred_shapegate/${b}.gpkg,EXTRA_ARGS="--max-area-ha 300 --crop-gate-amp 0.35 --crop-gate-shape $D/models/phenology_gate.joblib" \
              -N prs_$b predict_tile.pbs
     done
@@ -134,8 +134,8 @@ predict-shapegate-twopass)
     mkdir -p $M/pred_shapegate_twopass
     for f in $CH/p*.csv; do
         b=$(basename "$f" .csv)
-        qsub -l mem=8GB -v AOIS="$f",POLYDIR=$POLY,MODEL=$D/models/group3_map.joblib,\
-OUT=$M/pred_shapegate_twopass/${b}.gpkg,EXTRA_ARGS="--max-area-ha 300 --crop-gate-amp 0.35 --crop-gate-shape $D/models/phenology_gate.joblib --shape-gate-skip-classes Canola" \
+        qsub -l mem=8GB -v AOIS="$f",POLYDIR=$POLY,MODEL=$D/models/group3_map_sharma6.joblib,\
+OUT=$M/pred_shapegate_twopass/${b}.gpkg,EXTRA_ARGS="--max-area-ha 300 --crop-gate-amp 0.35 --crop-gate-shape $D/models/phenology_gate.joblib --shape-gate-skip-classes Canola Cereal Legume" \
              -N prtp_$b predict_tile.pbs
     done
     ;;
@@ -145,7 +145,7 @@ predict-shapegate-loose)
     mkdir -p $M/pred_shapegate_loose
     for f in $CH/p*.csv; do
         b=$(basename "$f" .csv)
-        qsub -l mem=8GB -v AOIS="$f",POLYDIR=$POLY,MODEL=$D/models/group3_map.joblib,\
+        qsub -l mem=8GB -v AOIS="$f",POLYDIR=$POLY,MODEL=$D/models/group3_map_sharma6.joblib,\
 OUT=$M/pred_shapegate_loose/${b}.gpkg,EXTRA_ARGS="--max-area-ha 300 --crop-gate-amp 0.35 --crop-gate-shape $D/models/phenology_gate_loose.joblib" \
              -N prl_$b predict_tile.pbs
     done
@@ -163,7 +163,7 @@ stability-merge)
     # with it once inference has landed, to get the rotation-plausibility section.
     $PY polygon_stability.py --polydir $POLY --merge "$M/stability/s*.csv" \
         --out $M/stability_all.csv --consensus $M/consensus.gpkg --min-years 5 \
-        ${PRED:+--pred "$M/pred/*.gpkg"} \
+        --aois $AOIS ${PRED:+--pred "$M/pred/*.gpkg"} \
         --report $REPO/output/POLYGON_STABILITY.md
     ;;
 *)

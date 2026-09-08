@@ -281,9 +281,14 @@ def main():
                              f"{100 * r.mapped_crop_ha / r.covered_ha:.0f} % | "
                              f"{100 * r.abs_crop_ha / (r.covered_ha / r.cover_frac):.0f} % | "
                              f"{r.area_ratio:.2f} |")
+            # abstain_reason, not pred, is authoritative for "cleanly classified" -- since
+            # 2026-09-07 a class in --shape-gate-skip-classes can carry a non-null pred AND a
+            # non-empty abstain_reason (the label is kept, the gate failure still recorded), so
+            # pred.notna() alone would undercount how much area is actually still gated.
+            clean = J.abstain_reason.fillna("") == ""
             lines += ["", f"**Median ratio {w.area_ratio.median():.2f}** over {len(w)} "
                           f"SA2-years — and the classifier abstained on "
-                          f"{100 * (1 - J.loc[J.pred.notna(), 'area_ha'].sum() / J.area_ha.sum()):.0f} % "
+                          f"{100 * (1 - J.loc[clean, 'area_ha'].sum() / J.area_ha.sum()):.0f} % "
                           f"of the mapped area besides, so this is a floor on how much land the "
                           f"map calls crop.", ""]
             # THE SHARE RESULT AND THE AREA RESULT ARE THE SAME RESULT, AND THIS SEPARATES THEM.

@@ -25,6 +25,7 @@
 # CPU chunk on the continent finishes. At 10,404 tiles that cost minutes. At 99,465 it would
 # cost hours, so here SAM job i waits only on the presegment chunks whose tiles it will read.
 #
+#   YEAR=2023 ./run_national.sh grid       # copy the 2024 tile grid, relabelled to this year
 #   ./run_national.sh chunks       # split the AOI list, preserving block order
 #   ./run_national.sh presegment   # ~320 jobs
 #   ./run_national.sh sam          # ~40 GPU jobs, each chained to its own 8 chunks
@@ -33,12 +34,28 @@
 #   ./run_national.sh repair       # re-derive and re-run whatever is missing on disk
 #   ./run_national.sh repair-check # did any repair job vanish on dependency release?
 #   ./run_national.sh repair-sam   # SAM over the repaired tiles
+#   ./run_national.sh resam        # SAM over tiles with a composite but no segmentation yet
+#                                 #   (covers SAM jobs killed at their 4h walltime mid-chunk —
+#                                 #    repair-sam only catches the missing-composite subset)
 #   ./run_national.sh repredict    # drop predictions written over unsegmented ground
 #   ./run_national.sh audit        # do the predictions CONTAIN every tile they were given?
 #                                 #   (the only check that sees a prediction written before
 #                                 #    its segmentation existed — status cannot)
 #   ./run_national.sh merge        # one national GeoPackage (refuses if chunks are incomplete)
+#   ./run_national.sh summary      # per-category polygon count/area for this year, from pred/*.gpkg
 #   ./run_national.sh cost         # SUs billed so far, by stage
+#
+# MULTI-YEAR RUNS. YEAR selects the working directory ($D/national$YEAR) and the imagery window;
+# it defaults to 2024 so every command above is unchanged for the year that already exists. Every
+# other year MUST start with `grid`, which copies 2024's aois.csv verbatim (same lat/lon/half_m/
+# grid_r/grid_c/block_r/block_c — only stub/year/start/end change) rather than re-deriving it from
+# the NLUM raster: nlum_tiles.py's mask is a static ~2020-21 survey, so a fresh derivation would
+# be numerically identical, but copying is the more honest guarantee and avoids any risk of the
+# raster path or a library version drifting between now and whenever 2024's grid was built.
+# OVERNIGHT_IMPROVEMENTS_SUMMARY.md's recommendation to keep one fixed grid across years (the
+# same convention run_map100.sh has always used for its 9-year Riverina pilot) is what this
+# generalises to national scale — do NOT pass map_regions.py's --offset-seed here, and do not
+# regenerate aois.csv from the raster for a non-2024 year.
 set -euo pipefail
 PY=/g/data/xe2/John/geospatenv/bin/python
 D=/scratch/xe2/cb8590/paddock-species-data/derived
@@ -46,7 +63,9 @@ REPO=/home/147/cb8590/Projects/paddock-species
 cd "$REPO/src/paddocks"
 export PROJ_NETWORK=OFF
 
-M=$D/national2024
+YEAR=${YEAR:-2024}
+GRID_FROM=${GRID_FROM:-2024}   # which year's aois.csv `grid` copies from
+M=$D/national$YEAR
 AOIS=$M/aois.csv
 POLY=$M/samgeo
 CH=$M/chunks
@@ -55,6 +74,31 @@ PER_SAM=${PER_SAM:-8}          # presegment chunks per SAM job -> 40 GPU jobs
 LANES=${LANES:-64}             # max presegment/predict jobs running at once (datacube pooler)
 
 case "${1:-}" in
+grid)
+    if [ "$YEAR" = "$GRID_FROM" ]; then
+        echo "YEAR=$GRID_FROM equals GRID_FROM — $AOIS already exists, nothing to do" >&2
+        exit 0
+    fi
+    BASE=$D/national$GRID_FROM/aois.csv
+    [ -f "$BASE" ] || { echo "base grid $BASE not found" >&2; exit 1; }
+    mkdir -p $M
+    $PY - "$BASE" "$YEAR" "$AOIS" <<'PYEOF'
+import sys, pandas as pd
+base, year, out = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+A = pd.read_csv(base)
+before = A["year"].iat[0]
+# Only the year-dependent columns move. stub embeds the base year once (nlum_<year>_r..._c...)
+# — replace that exact substring rather than doing a blind global year-string replace, so a
+# coincidental "2024" inside lat/lon (there is none at 6dp here, but never rely on that) can
+# never be touched.
+A["stub"] = A["stub"].str.replace(f"nlum_{before}_", f"nlum_{year}_", regex=False)
+A["year"] = year
+A["start"] = f"{year}-01-01"
+A["end"] = f"{year}-12-31"
+A.to_csv(out, index=False)
+print(f"{len(A):,} tiles -> {out} (grid copied from {base}, relabelled {before} -> {year})")
+PYEOF
+    ;;
 chunks)
     mkdir -p $CH; rm -f $CH/*.csv
     # Contiguous slices of the already block-sorted AOI list. nlum_tiles.py --all sorts by
@@ -135,10 +179,15 @@ for cf in sorted(glob.glob(os.path.join(ch, 'p*.csv'))):
         print(os.path.basename(cf)[:-4])
 PYEOF
     echo "$(wc -l < "$DONE") chunks already fully composited — skipping them"
+    # Same in-flight guard as `predict` (see its comment) — a chunk with a live ps_$b job is
+    # not yet in $DONE (its composites aren't finished) but must not be resubmitted either.
+    LIVE_NAMES=$(mktemp); qstat -u cb8590 -w 2>/dev/null | awk 'NR>5 {print $4}' > "$LIVE_NAMES"
+    trap 'rm -f "$LIVE_NAMES"' EXIT
     i=0; skipped=0; declare -a PREV
     for f in $CH/p*.csv; do
         b=$(basename "$f" .csv)
         if grep -qx "$b" "$DONE"; then skipped=$((skipped + 1)); continue; fi
+        grep -qx "ps_$b" "$LIVE_NAMES" && { skipped=$((skipped + 1)); continue; }
         if [ $room -le 0 ]; then
             echo "STOPPING at $b — $(ls $CH/p*.csv | wc -l) chunks wanted, $i submitted."
             echo "Re-run '$0 presegment' when the queue drains; it resumes where this left off."
@@ -189,7 +238,15 @@ PYEOF
 predict)
     mkdir -p $M/pred
     LIVE=$(mktemp); qstat -u cb8590 2>/dev/null | awk 'NR>5 {print $1}' > "$LIVE"
-    trap 'rm -f "$LIVE"' EXIT
+    # Chunk names with a job ALREADY queued or running for them. Without this, re-running
+    # `predict` before every prior job has finished (the normal way to resume once headroom
+    # frees up — predict jobs run up to 5h, so this is the common case, not an edge case)
+    # resubmits a duplicate job for every chunk still in flight: found 2026-09-03 when a 15-min
+    # polling loop did exactly this and produced 2-3x duplicate jobs racing to write the same
+    # output path (`P.to_file` truncates-then-writes, so two concurrent writers risk corrupting
+    # the GeoPackage, not just wasting the SU of the redundant run).
+    LIVE_NAMES=$(mktemp); qstat -u cb8590 -w 2>/dev/null | awk 'NR>5 {print $4}' > "$LIVE_NAMES"
+    trap 'rm -f "$LIVE" "$LIVE_NAMES"' EXIT
     # The abstain path stays PERMISSIVE on purpose: --crop-gate-amp 0.35 keeps everything with a
     # crop-like season, and every polygon ships its ndvi_amp, confidence and class probabilities
     # so a reader can tighten it afterwards. CONFIDENCE_FILTER.md measured what that filtering
@@ -197,6 +254,28 @@ predict)
     # the canola share error from 12.2 to 5.1 points. Baking that threshold in here would (a)
     # fit the map to ABS, destroying the only independent validation, and (b) throw away the
     # sown-but-not-harvested land, which is a real land use somebody may want.
+    #
+    # --crop-gate-shape + --shape-gate-skip-classes Canola Cereal Legume: the two-pass phenology
+    # gate (OVERNIGHT_IMPROVEMENTS_SUMMARY.md, ABS_COMPARISON_100km_shapegate_twopass.md) — the
+    # only config that improved BOTH the area ratio (1.59->1.19) and canola share error
+    # (9.4->5.2 pts) on the 9-year Riverina check, at zero extra SU since it only changes
+    # predict_tile.py's flags.
+    #
+    # ALL THREE CLASSES SKIP THE GATE (changed 2026-09-07, user request) -- previously only
+    # Canola did, and every OTHER class's shape-gate failure set abstain_reason=no_crop_shape
+    # AND nulled pred, discarding the class label. Now every class keeps its pred even on a
+    # shape-gate failure; predict_tile.py's shape-gate logic (see its own comment, same date)
+    # was fixed so abstain_reason is still recorded for a skipped class's failure, so nothing is
+    # made LESS auditable by this -- a reader filtering on `abstain_reason == ''` (or the
+    # inverse, to inspect what the gate would have rejected) gets exactly the same view as
+    # before. What changes is the RAW/default file: it now shows a classified label for every
+    # polygon regardless of the shape gate, matching the amplitude gate's existing permissive
+    # design (see above) rather than being the one gate that silently dropped the label.
+    #
+    # DOWNSTREAM CONSUMERS MUST KEY OFF abstain_reason, NOT pred.notna(). `pred` alone no longer
+    # means "passed every gate" for any class. Already updated for this: run_national.sh's own
+    # `summary` SQL, abs_compare.py, filter_sweep.py, consensus_layer.py, polygon_stability.py.
+    # Any NEW analysis script reading these predictions needs the same care.
     # Same ceiling as `presegment` — see the long note there. `repredict` hands this stage ~67
     # chunks at once, which is exactly the shape of submission that lost 56 jobs.
     MAXQ=${MAXQ:-180}
@@ -207,8 +286,9 @@ predict)
     for f in $CH/p*.csv; do
         b=$(basename "$f" .csv)
         [ -s "$M/pred/${b}.gpkg" ] && continue
+        grep -qx "pr_$b" "$LIVE_NAMES" && continue
         if [ $room -le 0 ]; then
-            echo "STOPPING at $b — re-run '$0 predict' when the queue drains (it skips finished chunks)"
+            echo "STOPPING at $b — re-run '$0 predict' when the queue drains (it skips finished AND in-flight chunks)"
             break
         fi
         # Two dependencies, collected as a list and turned into ONE flag at the end:
@@ -225,9 +305,15 @@ predict)
         lane=$((pi % LANES))
         [ -n "${PPREV[$lane]:-}" ] && DEPS="${DEPS:+$DEPS:}${PPREV[$lane]}"
         DEP=""; [ -n "$DEPS" ] && DEP="-W depend=afterany:$DEPS"
+        # MODEL: group3_map_sharma6.joblib (adopted 2026-09-08 after INDEPENDENT_REVIEW_shipped_
+        # sharma6.md, verdict ADOPT: macro F1 0.890/0.892 vs the retired group3_map.joblib's
+        # 0.821/0.823, canola@5%FPR unchanged). Two-source bundle (indices + bands-keep-families);
+        # predict_tile.py runs one zonal pass per source -- do NOT point this back at
+        # group3_map.joblib, which is kept on disk only so 2023/2024's pre-adoption outputs
+        # stay reproducible until they are re-predicted.
         JID=$(qsub $DEP -l mem=8GB -l walltime=05:00:00 \
-             -v AOIS="$f",POLYDIR=$POLY,MODEL=$D/models/group3_map.joblib,\
-OUT=$M/pred/${b}.gpkg,EXTRA_ARGS="--max-area-ha 300 --crop-gate-amp 0.35 --yield-model $D/models/cereal_yield.joblib" \
+             -v AOIS="$f",POLYDIR=$POLY,MODEL=$D/models/group3_map_sharma6.joblib,\
+OUT=$M/pred/${b}.gpkg,EXTRA_ARGS="--max-area-ha 300 --crop-gate-amp 0.35 --crop-gate-shape $D/models/phenology_gate.joblib --shape-gate-skip-classes Canola Cereal Legume --yield-model $D/models/cereal_yield.joblib" \
              -N pr_$b predict_tile.pbs)
         PPREV[$lane]=${JID%%.*}
         pi=$((pi + 1)); room=$((room - 1))
@@ -242,6 +328,15 @@ status)
     # (§ the queued_jobs_threshold note in `presegment`) reading zero for hours while nothing
     # was wrong with it. `find` streams its results and never builds an argv, so it cannot
     # develop this failure at any scale.
+    #
+    # mkdir -p HERE, NOT JUST A COMMENT. `find` on a directory that does not exist yet (e.g.
+    # $M/pred before `predict` has ever run for this year) exits non-zero even with its stderr
+    # redirected to /dev/null, and pipefail propagates that through the `| wc -l` pipeline and
+    # aborts the whole script under set -e — found 2026-09-01 checking status on a fresh
+    # national2023 right after `presegment`, before `predict` had created $M/pred. Silent to
+    # `status`'s caller too: no error text, just a dead script. Both mkdirs are idempotent no-ops
+    # once the later stage creates the directory for real.
+    mkdir -p $POLY $M/pred
     n=$(( $(wc -l < $AOIS) - 1 ))
     nc=$(find $POLY -maxdepth 1 -name '*.tif' ! -name '*_segment.tif' 2>/dev/null | wc -l)
     ns=$(find $POLY -maxdepth 1 -name '*_filt.gpkg' 2>/dev/null | wc -l)
@@ -255,7 +350,7 @@ status)
     # "queue: 0 jobs" while four rs_s* GPU jobs were an hour into their walltime — which read
     # exactly like the vanishing-job failure and sent one investigation down a blind alley.
     # A status line that omits a whole class of job is the same liability as one that overflows.
-    JOBS='ps_p|sam_s|pr_p|rp_r|rs_s'
+    JOBS='ps_p|sam_s|pr_p|rp_r|rs_s|rsm_z'
     q=$(qstat -u cb8590 2>/dev/null | grep -cE "$JOBS" || true)
     r=$(qstat -u cb8590 2>/dev/null | grep -E "$JOBS" | awk '$10=="R"' | wc -l || true)
     echo "queue:       $q jobs ($r running)"
@@ -499,6 +594,60 @@ PYEOF
     for b in $stale; do rm -f "$M/pred/$b.gpkg"; done
     echo "now run '$0 predict' — it will resubmit exactly the deleted chunks"
     ;;
+resam)
+    # THE GAP `repair-sam` DOESN'T COVER. `repair`/`repair-sam` only re-segment tiles that were
+    # missing a COMPOSITE. national2022 exposed a different failure: 38 of the original 40 SAM
+    # jobs (8 chunks / ~2,488 tiles each) ran to their full 4 h walltime and were killed mid-chunk
+    # — every one logged "Walltime Used: 04:00-04:02" — leaving composites built but never
+    # segmented for ~30k tiles that `repair` sees as already done. samgeo_segment.py is idempotent
+    # (an AOI whose _filt.gpkg exists is skipped, see its module docstring), so the fix is not to
+    # redo the whole `sam` stage but to hand SAM small enough batches that a job actually
+    # FINISHES: only tiles with a composite but no segmentation yet, in ${RESAM_TILES:-250}-tile
+    # jobs rather than 8-chunk ones. Safe to re-run — it only lists what is still unsegmented.
+    mkdir -p $M/resam
+    $PY - "$CH" "$POLY" "$M/resam" "${RESAM_TILES:-250}" <<'PYEOF'
+import csv, glob, os, sys
+ch, poly, out, per = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+comp = {f[:-4] for f in os.listdir(poly)
+        if f.endswith('.tif') and not f.endswith('_segment.tif')}
+seg = {f[:-len('_filt.gpkg')] for f in os.listdir(poly) if f.endswith('_filt.gpkg')}
+rows, hdr = [], None
+for cf in sorted(glob.glob(os.path.join(ch, 'p*.csv'))):
+    r = csv.DictReader(open(cf))
+    for x in r:
+        if x['stub'] in comp and x['stub'] not in seg:
+            hdr = hdr or list(x.keys()); rows.append(x)
+for f in glob.glob(os.path.join(out, 'z*.csv')):
+    os.remove(f)
+for i in range(0, len(rows), per):
+    with open(os.path.join(out, f"z{i // per:04d}.csv"), 'w', newline='') as fh:
+        w = csv.DictWriter(fh, fieldnames=hdr); w.writeheader(); w.writerows(rows[i:i + per])
+print(f"{len(rows)} tiles have a composite but no segmentation -> "
+      f"{(len(rows) + per - 1) // per} resam jobs")
+PYEOF
+    rm -f $M/resam/jobs.txt
+    # Same per-user queued-job ceiling as every other stage — see the long note in `presegment`.
+    MAXQ=${MAXQ:-180}
+    inq=$(qstat -u cb8590 2>/dev/null | awk 'NR>5' | wc -l)
+    room=$(( MAXQ - inq ))
+    echo "queue holds $inq jobs; headroom to MAXQ=$MAXQ is $room"
+    i=0
+    for f in $M/resam/z*.csv; do
+        [ -e "$f" ] || continue
+        b=$(basename "$f" .csv)
+        if [ $room -le 0 ]; then
+            echo "OUT OF HEADROOM at $b — re-run '$0 resam' when the queue drains (idempotent)"
+            break
+        fi
+        # No lane chaining: unlike presegment/predict, SAM never touches the DEA connection
+        # pooler (it only reads composite .tif files already on disk), so there is nothing here
+        # for chaining to protect — PBS's own scheduler manages gpuvolta concurrency.
+        JID=$(qsub -l walltime=02:00:00 -v AOIS="$f",OUTDIR=$POLY -N rsm_$b sam_segment.pbs)
+        echo "$b ${JID%%.*}" >> $M/resam/jobs.txt
+        i=$((i + 1)); room=$((room - 1))
+    done
+    echo "submitted $i resam jobs of up to ${RESAM_TILES:-250} tiles each"
+    ;;
 merge)
     # Refuse to build a national map out of a run with known holes. A merge is the last point
     # at which the gap is still attributable to a chunk; afterwards it is just missing ground.
@@ -519,13 +668,48 @@ PYEOF
         echo "or set FORCE_MERGE=1 to merge a map with known holes." >&2
         exit 1
     fi
-    qsub -v M=$M merge_national.pbs
+    qsub -v M=$M,YEAR=$YEAR merge_national.pbs
+    ;;
+summary)
+    # Per-category polygon count and area, for comparing one year against another (and against
+    # NATIONAL_2024_RUN.md's original numbers, which predate --yield-model and the two-pass
+    # gate). Reads the merged file so it needs `merge` to have finished first — ogrinfo's own SQL
+    # engine does the aggregation, the same reason merge_national.pbs uses ogr2ogr rather than
+    # pulling everything through geopandas.
+    OUT=$M/national_${YEAR}_crops.gpkg
+    [ -f "$OUT" ] || { echo "no merged file at $OUT — run '$0 merge' first" >&2; exit 1; }
+    module load gdal/3.7.3
+    echo "== $YEAR: polygon count and area by category =="
+    # abstain_reason, not pred, is authoritative for "did this actually pass the gates" --
+    # since 2026-09-07 a class in --shape-gate-skip-classes can carry a non-null `pred` AND a
+    # non-empty abstain_reason at the same time (the class label is kept, but the shape-gate
+    # failure is still recorded so it stays filterable). COALESCE(pred, ...) would have grouped
+    # those rows under their class name instead of "abstain: no_crop_shape", silently hiding
+    # exactly the gate-failed polygons this report exists to surface.
+    ogrinfo -q -dialect sqlite -sql \
+      "SELECT CASE WHEN abstain_reason IS NOT NULL AND abstain_reason != '' \
+                   THEN 'abstain: ' || abstain_reason ELSE pred END AS category, \
+              COUNT(*) AS n, ROUND(SUM(area_ha)) AS ha \
+       FROM crops GROUP BY category ORDER BY ha DESC" "$OUT"
+    echo
+    echo "== touches_grid (candidate tile-boundary cuts) =="
+    ogrinfo -q -dialect sqlite -sql \
+      "SELECT touches_grid, COUNT(*) AS n, ROUND(SUM(area_ha)) AS ha \
+       FROM crops GROUP BY touches_grid" "$OUT"
+    if ogrinfo -q -so "$OUT" crops | grep -q yield_tha_calibrated; then
+        echo
+        echo "== cereal yield (calibrated t/ha) =="
+        ogrinfo -q -dialect sqlite -sql \
+          "SELECT COUNT(*) AS n_scored, ROUND(AVG(yield_tha_calibrated),2) AS mean_tha, \
+                  ROUND(SUM(area_ha)) AS ha_scored \
+           FROM crops WHERE yield_tha_calibrated IS NOT NULL" "$OUT"
+    fi
     ;;
 cost)
     grep -h "Service Units" /scratch/xe2/cb8590/paddock-species-logs/*.OU 2>/dev/null \
       | awk '{s+=$3} END {printf "all logs: %.1f SU\n", s}'
     ;;
 *)
-    echo "usage: $0 {chunks|presegment|sam|predict|status|repair|repair-check|repair-sam|repredict|merge|cost}" >&2
+    echo "usage: $0 {grid|chunks|presegment|sam|predict|status|repair|repair-check|repair-sam|resam|repredict|merge|summary|cost}" >&2
     exit 2 ;;
 esac

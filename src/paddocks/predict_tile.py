@@ -27,10 +27,12 @@ Anything computed differently here would be a distribution shift the validation 
 
 WHAT IS EMITTED. One row per polygon with the predicted class, the probability of EVERY class,
 and the quality fields (`area_ha`, `compactness`, `n_obs`, `n_clear_frac`, `treed_frac`,
-`n_feat_present`). The probabilities are not decoration: every operating-point result in this
-project — canola at 5 % FPR, the precision/recall trade — is unrecoverable from a hard label,
-and a national product cannot be hand-reviewed, so the fields the hand review used have to
-travel with the data instead.
+`n_feat_present`, `touches_grid`, `dist_to_grid_m`). The probabilities are not decoration: every
+operating-point result in this project — canola at 5 % FPR, the precision/recall trade — is
+unrecoverable from a hard label, and a national product cannot be hand-reviewed, so the fields
+the hand review used have to travel with the data instead. `touches_grid`/`dist_to_grid_m` flag
+whether a polygon sits near its own tile's edge — a candidate for a tile-grid cut, not a filter;
+every polygon ships regardless of its value (see `--grid-touch-tol-m`).
 """
 import argparse
 import glob
@@ -106,6 +108,113 @@ def zonal_medians(ds, labels, n_poly, value_cols, kind):
             warnings.simplefilter("ignore", RuntimeWarning)
             out[i] = np.nanmedian(S[:, px, :], axis=1)
     return out, n_clear, n_px
+
+
+def sharma6_from_bands(bandvals, names):
+    """The 6 Sharma et al. (2026) Table S2 indices, on an (n_poly, n_time, n_band) MEDIANED
+    array — index-of-median, not median-of-index.
+
+    Formulas copied verbatim from `train_species.py`'s `add_indices()`, re-targeted from its
+    DOY-binned wide columns to this array's band axis so they run once per (polygon, scene).
+    That is the same quantity `add_indices()` already produces in training (it only ever runs
+    on binned band medians, never on a per-pixel array), so these columns mean the same thing
+    here as they do to the classifier.
+
+    NOTE THE ASYMMETRY, and see the store's own `index_semantics` attribute: NDVI/NDYI/CFI come
+    from `zonal_medians(kind="indices")`, which is median-of-per-pixel-index, while these six
+    are index-of-median. CFI is non-linear in reflectance so the two are genuinely different
+    quantities. This mirrors production rather than inventing a convention for the archive.
+    """
+    idx = {n: bandvals[..., names.index(n)] for n in names}
+    red, green, blue = idx["red"], idx["green"], idx["blue"]
+    nir, re1, re2 = idx["nir_1"], idx["red_edge_1"], idx["red_edge_2"]
+    out = {}
+    with np.errstate(invalid="ignore", divide="ignore"):
+        out["ndre2"] = np.where(np.abs(nir + re2) < 1e-6, np.nan, (nir - re2) / (nir + re2))
+        out["vi2"] = (re2 + red) - (re1 - blue)
+        out["vi3"] = (re1 + green) - (blue + red)
+        vdvi_denom = 2 * green + red + blue
+        out["vdvi"] = np.where(np.abs(vdvi_denom) < 1e-6, np.nan,
+                               (2 * green - red - blue) / vdvi_denom)
+        r_ng = 0.38 * (nir - green) + green
+        vci_denom = (r_ng - blue) ** 2
+        out["vci"] = np.where(np.abs(vci_denom) < 1e-6, np.nan, (r_ng - red) ** 2 / vci_denom)
+        evi2s_denom = nir + red + 1.0
+        out["evi2_sharma"] = np.where(np.abs(evi2s_denom) < 1e-6, np.nan,
+                                      2.4 * (nir - red) / evi2s_denom)
+    return out
+
+
+def write_chunk_zarr(path, recs, model_desc):
+    """One consolidated .zarr for a whole chunk of tiles, dims (paddock, time).
+
+    WHY ONE STORE PER CHUNK, NOT PER TILE. `ZARR_BENCHMARK.md` measured the per-tile design at
+    26-39 % of baseline on-disk storage against 8-24 % logical, because each store pays ~47
+    fixed metadata files regardless of how few polygons the tile holds — and at national scale
+    that is 99,465 stores / ~6.9 M files, which is a Lustre metadata problem independent of the
+    byte count. A chunk store pays that fixed cost once per ~311 tiles instead, matching how
+    `predict_tile.py` already writes exactly one GeoPackage per chunk.
+
+    The time axis is the UNION of the chunk's tiles' scene dates; a paddock is NaN on any date
+    its own tile was not observed. Tiles in a chunk are spatially contiguous (the AOI list is
+    block-sorted for scene-cache locality), so they share most dates and the union stays close
+    to a single tile's scene count — and the NaN padding compresses to almost nothing.
+
+    Joins to the predictions GeoPackage on (stub, poly_idx).
+    """
+    import xarray as xr
+
+    all_times = np.unique(np.concatenate([r["times"].values for r in recs]))
+    tpos = {t: i for i, t in enumerate(all_times)}
+    n_pad = sum(len(r["poly_idx"]) for r in recs)
+    nt = len(all_times)
+    varnames = sorted({v for r in recs for v in r["vars"]})
+
+    data = {v: np.full((n_pad, nt), np.nan, "float32") for v in varnames}
+    n_clear = np.zeros((n_pad, nt), "int32")
+    n_px = np.zeros(n_pad, "int32")
+    stub_co, pidx_co = np.empty(n_pad, object), np.empty(n_pad, "int32")
+
+    p0 = 0
+    for r in recs:
+        n = len(r["poly_idx"])
+        cols = np.array([tpos[t] for t in r["times"].values])
+        for v, arr in r["vars"].items():
+            data[v][p0:p0 + n, cols] = arr
+        n_clear[p0:p0 + n, cols] = r["n_clear"]
+        n_px[p0:p0 + n] = r["n_px"]
+        stub_co[p0:p0 + n] = r["stub"]
+        pidx_co[p0:p0 + n] = r["poly_idx"]
+        p0 += n
+
+    ds = xr.Dataset(
+        {v: (("paddock", "time"), a) for v, a in data.items()}
+        | {"n_clear": (("paddock", "time"), n_clear), "n_px": ("paddock", n_px)},
+        coords={"paddock": np.arange(n_pad), "time": pd.to_datetime(all_times),
+                "stub": ("paddock", stub_co.astype(str)),
+                "poly_idx": ("paddock", pidx_co)},
+        attrs={
+            "title": "Per-paddock, per-scene Sentinel-2 medians (paddock-species)",
+            "source_model": model_desc,
+            "join": "join to the predictions GeoPackage on (stub, poly_idx)",
+            "index_semantics": ("ndvi/ndyi/cfi are median-of-per-pixel-index (as the classifier "
+                                "computes them); ndre2/vi2/vi3/vdvi/vci/evi2_sharma are "
+                                "index-of-median, matching train_species.py add_indices()"),
+            "nan_meaning": ("NaN = no clear pixel for that paddock on that date, OR the date "
+                            "belongs to another tile in this chunk. n_clear distinguishes them: "
+                            "n_clear == 0 with the date in the paddock's own tile means cloud."),
+            "reflectance": "surface reflectance, scaled to 0-1 (raw DN / 10000)",
+            "crs": "EPSG:3577 (polygons); values are zonal medians over eroded polygons",
+        },
+    )
+    enc = {v: {"chunks": (min(n_pad, 512), min(nt, 128))} for v in list(data) + ["n_clear"]}
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    ds.to_zarr(path, mode="w", encoding=enc, consolidated=True)
+    size = sum(os.path.getsize(os.path.join(dp, f))
+               for dp, _, fs in os.walk(path) for f in fs)
+    print(f"\nzarr: {n_pad} paddocks x {nt} scene-dates x {len(varnames)} variables "
+          f"-> {path} ({size / 1e6:.1f} MB on disk)")
+    return size
 
 
 def shape_gate(long, ndvi_col, SG):
@@ -188,6 +297,19 @@ def main():
                          "Motivated by the shape gate's canola-specific recall shortfall "
                          "(83.4% vs cereal 95.1%/legume 95.5%, PHENOLOGY_GATE.md). No effect "
                          "unless --crop-gate-shape is also given.")
+    ap.add_argument("--grid-touch-tol-m", type=float, default=10.0,
+                    help="a polygon within this many metres of ITS OWN tile's edge is flagged "
+                         "touches_grid=True (dist_to_grid_m carries the raw distance). Default "
+                         "matches the 10m (one Sentinel-2 pixel) tolerance used throughout "
+                         "PIPELINE_ARCHITECTURE_AND_TILING.md's boundary-split quantification "
+                         "and polygon_stability.py's --grid-touch-tol-m. Computed against the "
+                         "tile's INTENDED bounds (this row's lat/lon +/- half_m from --aois, "
+                         "reprojected to EPSG:3577), not the downloaded composite's own bounds "
+                         "-- the raster is padded some hundreds of metres past the true AOI "
+                         "window, so measuring against it would flag the padding edge, not the "
+                         "tile-to-tile abutment line a national mosaic actually cuts along. "
+                         "Applies to EVERY polygon carried through, including abstained ones -- "
+                         "this is a geometry fact about the tile, not a classification outcome.")
     ap.add_argument("--doy", nargs=2, type=int, default=[90, 350], metavar=("START", "END"),
                     help="read only this day-of-year window, overriding the AOI's start/end. "
                          "Defaults to the exact span `build_features` bins over, which is also "
@@ -198,19 +320,40 @@ def main():
     ap.add_argument("--chm-dir", default="/scratch/xe2/cb8590/Global_Canopy_Height_v2")
     ap.add_argument("--no-tree-mask", action="store_true")
     ap.add_argument("--timings", help="append per-tile timings here (for the cost benchmark)")
+    # ON BY DEFAULT (user decision 2026-09-08). The raw per-scene, per-paddock medians are
+    # already computed in memory as the classifier's own intermediate -- `build_features` bins
+    # them into DOY windows and the raw series is otherwise thrown away. Persisting it costs
+    # only the write: `ZARR_BENCHMARK.md` measured 0.4-1.7 s/tile against a ~14 s/tile amortised
+    # production baseline, and the two line items that dominated that benchmark's "extra" cost
+    # (a second wider datacube read, and a 10-band zonal pass) are now BASELINE, because the
+    # adopted shipped+sharma6 model reads ALL_BANDS for its own features.
+    ap.add_argument("--no-zarr", action="store_true",
+                    help="skip writing the per-scene paddock time series. The store is written "
+                         "by default; this opts out.")
+    ap.add_argument("--zarr-out", default=None,
+                    help="path for the chunk's .zarr store (default: <out-dir>/../zarr/"
+                         "<out-basename>.zarr)")
     args = ap.parse_args()
 
     os.environ.setdefault("PROJ_NETWORK", "OFF")
     import datacube
     import geopandas as gpd
     import joblib
+    from pyproj import Transformer
     from rasterio.features import rasterize
     from train_species import build_features
 
+    to_albers = Transformer.from_crs("EPSG:4326", "EPSG:3577", always_xy=True)
+
     B = joblib.load(args.model)
-    clf, columns, value_cols, kind = B["model"], B["columns"], B["value_cols"], B["kind"]
+    clf, columns = B["model"], B["columns"]
+    # `sources` (written by fit_map_model.py since 2026-09-08) lists every (kind, value_cols)
+    # the model was fitted from -- the shipped+sharma6 classifier has two. Older single-source
+    # bundles (group3_map.joblib, group4.joblib) carry only kind/value_cols; same thing, one entry.
+    sources = [tuple(s) for s in (B.get("sources") or [(B["kind"], B["value_cols"])])]
     classes = list(clf.classes_)
-    print(f"model: {B['target']}, {kind}, {len(columns)} features, classes {classes}")
+    print(f"model: {B['target']}, sources {[k for k, _ in sources]}, {len(columns)} features, "
+          f"classes {classes}")
 
     YB = joblib.load(args.yield_model) if args.yield_model else None
     if YB is not None:
@@ -219,9 +362,27 @@ def main():
 
     SG = joblib.load(args.crop_gate_shape) if args.crop_gate_shape else None
     if SG is not None:
+        # phenology_gate.py's two save paths use different keys for the same number: the
+        # --senescence-slack-pct ("loose") bundle writes held_out_recall_baseline, the plain
+        # bundle writes held_out_recall. Log-line only -- read whichever is present rather than
+        # crash on the print statement.
+        recall = SG.get("held_out_recall", SG.get("held_out_recall_baseline"))
         print(f"shape gate: {SG['thresholds']}, held-out recall "
-              f"{SG['held_out_recall']:.1%} on {SG['n_train']} NVT trials "
+              f"{recall:.1%} on {SG['n_train']} NVT trials "
               f"(output/PHENOLOGY_GATE.md — NOT validated against ABS area ratio)")
+
+    zarr_recs = []
+    zarr_path = None
+    if not args.no_zarr:
+        # Fail NOW, not four hours into a chunk: a missing dependency on a default-on feature
+        # must not surface after the datacube reads are already paid for.
+        import zarr  # noqa: F401
+        zarr_path = args.zarr_out or os.path.join(
+            os.path.dirname(os.path.abspath(args.out)), "..", "zarr",
+            os.path.splitext(os.path.basename(args.out))[0] + ".zarr")
+        zarr_path = os.path.normpath(zarr_path)
+        print(f"zarr: writing per-scene paddock time series to {zarr_path} "
+              f"(disable with --no-zarr)")
 
     masker = None
     if not args.no_tree_mask:
@@ -259,7 +420,9 @@ def main():
 
     dc = datacube.Datacube(app="predict_tile")
 
-    measurements = ((ALL_BANDS if kind == "bands" else IDX_BANDS) + ["oa_fmask"])
+    # ALL_BANDS is a superset of IDX_BANDS, so one read serves every source.
+    measurements = ((ALL_BANDS if any(k == "bands" for k, _ in sources) else IDX_BANDS)
+                    + ["oa_fmask"])
     out_parts = []
 
     for _, a in aois.iterrows():
@@ -271,6 +434,18 @@ def main():
         t0 = time.time()
         poly_all = gpd.read_file(p).to_crs("EPSG:3577")
         poly_all["area_ha"] = (poly_all.geometry.area / 1e4).round(2)
+        # touches_grid / dist_to_grid_m: does THIS polygon sit within tolerance of ITS OWN
+        # tile's edge, i.e. is it a candidate for having been cut by the tile grid rather than
+        # by a real paddock boundary. Every polygon gets this (abstained ones too) — it is a
+        # geometry fact about the tile, not a classification outcome, and it stays a plain
+        # attribute here: nothing is filtered or merged across tiles on the strength of it.
+        cx, cy = to_albers.transform(a["lon"], a["lat"])
+        half_m = a["half_m"]
+        pb = poly_all.geometry.bounds
+        dx = np.minimum(np.abs(pb.minx - (cx - half_m)), np.abs(pb.maxx - (cx + half_m)))
+        dy = np.minimum(np.abs(pb.miny - (cy - half_m)), np.abs(pb.maxy - (cy + half_m)))
+        poly_all["dist_to_grid_m"] = np.minimum(dx, dy).round(1)
+        poly_all["touches_grid"] = poly_all["dist_to_grid_m"] <= args.grid_touch_tol_m
         # EVERY polygon is carried to the output, with the reason it was not classified. A
         # polygon dropped here is white space on the map, and white space that cannot be
         # attributed to a cause is indistinguishable from ground with no crop on it — which is
@@ -333,23 +508,50 @@ def main():
                 treed[:] = np.nan
 
         n_poly = len(poly)
-        vals, n_clear, n_px = zonal_medians(ds, labels, n_poly, value_cols, kind)
-        t_zonal = time.time() - t1
-
-        # Long form, so the SAME `build_features` the model was trained with does the binning.
-        # Rebuilding the pivot here would be a second implementation of the feature contract
-        # and the two would drift.
+        # ONE ZONAL PASS PER SOURCE, JOINED EXACTLY AS TRAINING JOINED THEM. A model fitted from
+        # --indices AND --bands (the shipped+sharma6 classifier: NDVI/NDYI/CFI per-pixel-then-
+        # median from IDX_BANDS, plus Sharma et al. 2026's six derived from ALL_BANDS medians)
+        # carries columns suffixed "@indices"/"@bands" by train_species.py / fit_map_model.py.
+        # Before 2026-09-08 this ran a single (kind, value_cols) pass and reindexed onto
+        # `columns`: for a two-source model every column of the missing source came back NaN,
+        # which HGB accepts without complaint, so the tile would have been classified from a
+        # half-empty matrix with no error anywhere -- the "confident nonsense" fit_map_model.py's
+        # docstring warns about. Per-source frames are kept UNSUFFIXED in `F_raw_plain` for the
+        # yield model and the gates, which were trained on single-source column names.
         times = pd.to_datetime(ds["time"].values)
-        keep_obs = (n_clear / np.maximum(n_px, 1)[:, None]) >= args.min_clear_frac
-        pi, ti = np.nonzero(keep_obs)
-        if pi.size == 0:
+        parts_plain, long_gate, gate_cols = {}, None, None
+        n_clear = n_px = pi0 = None
+        raw_by_kind = {}
+        for s_kind, s_cols in sources:
+            vals, s_clear, s_px = zonal_medians(ds, labels, n_poly, s_cols, s_kind)
+            raw_by_kind[s_kind] = (vals, s_cols)
+            keep_obs = (s_clear / np.maximum(s_px, 1)[:, None]) >= args.min_clear_frac
+            pi, ti = np.nonzero(keep_obs)
+            if pi.size == 0:
+                break
+            if n_clear is None:
+                n_clear, n_px, pi0 = s_clear, s_px, pi   # same fmask/labels for every source
+            long_s = pd.DataFrame({"TrialCode": pi, "time": times[ti]})
+            for j, c in enumerate(s_cols):
+                long_s[c] = vals[pi, ti, j]
+            if long_gate is None and any("ndvi" in c for c in s_cols):
+                long_gate, gate_cols = long_s, s_cols
+            # Long form, so the SAME `build_features` the model was trained with does the
+            # binning. Rebuilding the pivot here would be a second implementation of the
+            # feature contract and the two would drift.
+            parts_plain[s_kind] = build_features(long_s, s_cols, False, None, B.get("bin_step"))
+        t_zonal = time.time() - t1
+        if len(parts_plain) < len(sources):
             print(f"{stub}: no polygon-dates clear enough", flush=True)
             continue
-        long = pd.DataFrame({"TrialCode": pi, "time": times[ti]})
-        for j, c in enumerate(value_cols):
-            long[c] = vals[pi, ti, j]
-
-        F_raw = build_features(long, value_cols, False, None, B.get("bin_step"))
+        pi = pi0
+        frames = list(parts_plain.values())
+        F_raw_plain = frames[0] if len(frames) == 1 else frames[0].join(frames[1:], how="inner")
+        if len(sources) > 1:
+            suffixed = [f.add_suffix(f"@{k}") for k, f in parts_plain.items()]
+            F_raw = suffixed[0].join(suffixed[1:], how="inner")
+        else:
+            F_raw = F_raw_plain
         F = F_raw.reindex(columns=columns)
         n_obs = pd.Series(pi).value_counts()
         ok = F.index[F.index.map(n_obs).fillna(0) >= args.min_obs]
@@ -363,14 +565,14 @@ def main():
         # NDVI amplitude per polygon, from the same long form the features are built from, so
         # the gate sees exactly the series the classifier does.
         amp = None
-        ndvi_col = next((c for c in value_cols if "ndvi" in c), None)
+        ndvi_col = next((c for c in (gate_cols or []) if "ndvi" in c), None)
         if args.crop_gate_amp is not None and ndvi_col:
-            q = long.groupby("TrialCode")[ndvi_col].quantile([0.1, 0.9]).unstack()
+            q = long_gate.groupby("TrialCode")[ndvi_col].quantile([0.1, 0.9]).unstack()
             amp = (q[0.9] - q[0.1])
 
         shape_pass = None
         if SG is not None and ndvi_col:
-            shape_pass = shape_gate(long, ndvi_col, SG)
+            shape_pass = shape_gate(long_gate, ndvi_col, SG)
 
         proba = clf.predict_proba(F.values)
         pred = np.array(classes)[proba.argmax(axis=1)].astype(object)
@@ -394,18 +596,33 @@ def main():
             g.loc[fails, "abstain_reason"] = "no_crop_signal"
             pred = np.where(fails.values, None, pred)
         if shape_pass is not None:
-            fails_shape = ~shape_pass.reindex(F.index).fillna(False).values
-            if args.shape_gate_skip_classes:
-                # Two-pass gating (PHENOLOGY_GATE.md 'Next step' #2): a polygon already
-                # classified into an exempt class (by amplitude-gated argmax, above) is not
-                # subjected to the stricter shape check at all -- `pred` still holds that
-                # class here, since only fails_shape/amp have touched it so far.
-                exempt = np.isin(pred.astype(object), args.shape_gate_skip_classes)
-                fails_shape = fails_shape & ~exempt
+            # `abstain_reason` always reflects the RAW shape-check outcome, regardless of
+            # --shape-gate-skip-classes -- a skipped class's failure is still recorded and
+            # therefore still filterable downstream. Only whether `pred` gets NULLED is
+            # controlled by the skip list, via a separate boolean below.
+            #
+            # THE BUG THIS FIXES. Before 2026-09-07 these were the SAME boolean: an exempt
+            # class's shape-gate failure was excluded from `fails_shape` before either the
+            # abstain_reason write OR the pred-nulling, so it left literally no trace --
+            # neither a null pred nor an abstain_reason to filter on later. That was fine for
+            # Canola (permanently exempt, always shipped as classified, by design), but it
+            # silently breaks "predict every class, mask out gate failures afterward" for any
+            # OTHER class added to the skip list: there would be nothing left to mask against.
+            fails_shape_raw = ~shape_pass.reindex(F.index).fillna(False).values
             # Do not overwrite an existing reason (area/amplitude already explains the abstain).
             blank = g["abstain_reason"] == ""
-            g.loc[blank & fails_shape, "abstain_reason"] = "no_crop_shape"
-            pred = np.where(fails_shape, None, pred)
+            g.loc[blank & fails_shape_raw, "abstain_reason"] = "no_crop_shape"
+            fails_shape_null = fails_shape_raw
+            if args.shape_gate_skip_classes:
+                # Two-pass gating (PHENOLOGY_GATE.md 'Next step' #2): a polygon already
+                # classified into an exempt class (by amplitude-gated argmax, above) keeps its
+                # `pred` even when it fails the shape check -- `pred` still holds that class
+                # here, since only fails/amp have touched it so far. The abstain_reason set
+                # above still marks the failure, so a downstream reader can still filter it out;
+                # only the class label itself is preserved rather than discarded.
+                exempt = np.isin(pred.astype(object), args.shape_gate_skip_classes)
+                fails_shape_null = fails_shape_raw & ~exempt
+            pred = np.where(fails_shape_null, None, pred)
         g["pred"] = pred
         g["confidence"] = proba.max(axis=1).round(4)
         for k, c in enumerate(classes):
@@ -422,7 +639,9 @@ def main():
             g["yield_tha"] = np.nan
             g["yield_tha_calibrated"] = np.nan
             if is_target.any():
-                Fy = F_raw.reindex(columns=YB["columns"]).loc[F.index]
+                # Unsuffixed: the yield model was fitted from a single source, so its column
+                # names carry no "@source" tag even when the classifier's do.
+                Fy = F_raw_plain.reindex(columns=YB["columns"]).loc[F.index]
                 raw = YB["model"].predict(Fy.values[is_target])
                 # Raw is NVT-trial-equivalent yield, not commercial paddock yield (trial plots
                 # under trial management out-yield the field around them). `calibration_factor`
@@ -442,6 +661,21 @@ def main():
         if len(poly_all) > len(poly):
             rest = poly_all[poly_all.abstain_reason != ""].copy()
             out_parts.append(rest.assign(stub=stub, year=year))
+
+        if zarr_path is not None:
+            # The raw (paddock, scene) medians the classifier just built its DOY bins from.
+            # Every variable here is already in memory: nothing is re-read or re-aggregated.
+            zvars = {}
+            for s_kind, (vals, s_cols) in raw_by_kind.items():
+                for j, c in enumerate(s_cols):
+                    zvars[c.replace("_pad_median", "")] = vals[:, :, j].astype("float32")
+            if "bands" in raw_by_kind:
+                bvals, bcols = raw_by_kind["bands"]
+                zvars.update({k: v.astype("float32")
+                              for k, v in sharma6_from_bands(bvals, list(bcols)).items()})
+            zarr_recs.append({"stub": stub, "times": times,
+                              "poly_idx": np.arange(n_poly, dtype="int32"),
+                              "n_clear": n_clear, "n_px": n_px, "vars": zvars})
 
         dt = time.time() - t0
         share = pd.Series(pred).value_counts(normalize=True)
@@ -463,6 +697,9 @@ def main():
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     P.to_file(args.out, layer="paddocks", driver="GPKG")
     print(f"\n{len(P)} polygons over {P.stub.nunique()} tiles -> {args.out}")
+    if zarr_path is not None and zarr_recs:
+        write_chunk_zarr(zarr_path, zarr_recs,
+                         f"{args.model} ({', '.join(k for k, _ in sources)})")
     print(P.groupby(["year", "pred"], dropna=False).agg(n=("pred", "size"),
                                                         ha=("area_ha", "sum")).round(0).to_string())
     if "abstain_reason" in P:

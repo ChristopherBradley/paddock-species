@@ -28,7 +28,7 @@ import os
 import numpy as np
 import pandas as pd
 
-from train_species import GROUP, GROUP4, build_features
+from train_species import BANDS, GROUP, GROUP4, build_features, family
 
 
 def load(pats, min_clear_frac=0.5):
@@ -44,6 +44,18 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--indices", nargs="*", default=[])
     ap.add_argument("--bands", nargs="*", default=[])
+    ap.add_argument("--bands-keep-families", nargs="*", default=None,
+                    help="with --bands: after build_features() derives its indices, keep ONLY "
+                         "these derived-index families (e.g. ndre2 vi2 vi3 vdvi vci "
+                         "evi2_sharma) — same semantics as train_species.py's flag of the same "
+                         "name, needed to reproduce a --bands+--indices candidate exactly "
+                         "(e.g. the shipped+sharma6 classifier, GROUP3_MODEL_shipped_plus_"
+                         "sharma6_VALIDATION.md) as the model a map run actually uses. Combined "
+                         "with --indices when both are given, mirroring train_species.py's "
+                         "multi-source join (inner, column-suffixed by source) — this project's "
+                         "generator-evaluator review of that candidate covered exactly this "
+                         "feature construction, so it is duplicated here deliberately rather "
+                         "than refactored out of the already-reviewed train_species.py.")
     ap.add_argument("--labeled", required=True)
     ap.add_argument("--keep", required=True)
     ap.add_argument("--target", choices=["group3", "group4", "canola", "crop2"],
@@ -60,24 +72,45 @@ def main():
     import joblib
     from sklearn.ensemble import HistGradientBoostingClassifier
 
-    if args.bands:
-        ts = load(args.bands)
-        value_cols = [b for b in ["blue", "green", "red", "red_edge_1", "red_edge_2",
-                                  "red_edge_3", "nir_1", "nir_2", "swir_2", "swir_3"]
-                      if b in ts.columns]
-        kind = "bands"
-    else:
-        ts = load(args.indices)
-        value_cols = [c for c in ts.columns if c.endswith("_pad_median")]
-        kind = "indices"
     lab = pd.read_csv(args.labeled).drop_duplicates("TrialCode")
     keep = set(pd.read_csv(args.keep).TrialCode)
-    ts = ts[ts.TrialCode.isin(keep)]
-    n = ts.groupby("TrialCode").size()
-    ts = ts[ts.TrialCode.isin(set(n[n >= args.min_obs].index))]
-    print(f"{kind}: {ts.TrialCode.nunique()} paddocks, {len(value_cols)} value columns")
 
-    F = build_features(ts, value_cols, False, lab, args.bin_step)
+    # Bands and indices are NOT interchangeable inputs (CFI is non-linear in reflectance, so
+    # median-of-per-pixel-CFI != CFI-of-median-reflectance), and a --bands+--indices candidate
+    # needs BOTH joined together, exactly as train_species.py does for validation. `kind`/
+    # `value_cols` in the saved bundle describe only the LAST source for backward compat with
+    # single-source bundles (group3_map.joblib, group4.joblib); predict_tile.py reads `columns`
+    # for the actual feature contract, not `kind`/`value_cols`, so this does not change how
+    # existing single-source models are loaded or predicted from.
+    sources = []
+    if args.bands:
+        tb = load(args.bands)
+        sources.append(("bands", tb, [b for b in BANDS if b in tb.columns]))
+    if args.indices:
+        ti = load(args.indices)
+        sources.append(("indices", ti, [c for c in ti.columns if c.endswith("_pad_median")]))
+    if not sources:
+        raise SystemExit("give --bands and/or --indices")
+
+    parts = []
+    value_cols, kind = sources[-1][2], sources[-1][0]
+    for name, t, cols in sources:
+        t = t[t.TrialCode.isin(keep)]
+        n = t.groupby("TrialCode").size()
+        t = t[t.TrialCode.isin(set(n[n >= args.min_obs].index))]
+        print(f"{name}: {t.TrialCode.nunique()} paddocks, {len(cols)} value columns")
+        f = build_features(t, cols, False, lab, args.bin_step)
+        if name == "bands" and args.bands_keep_families is not None:
+            keep_fams = set(args.bands_keep_families)
+            keep_cols = [c for c in f.columns if family(c) in keep_fams]
+            dropped = f.shape[1] - len(keep_cols)
+            f = f[keep_cols]
+            print(f"--bands-keep-families {sorted(keep_fams)}: dropped {dropped} other "
+                  f"columns, {f.shape[1]} columns remain")
+        if len(sources) > 1:
+            f = f.add_suffix(f"@{name}")
+        parts.append(f)
+    F = parts[0] if len(parts) == 1 else parts[0].join(parts[1:], how="inner")
     meta = lab.set_index("TrialCode").reindex(F.index)
     F = F.loc[meta.crop.notna()]
     meta = meta.loc[F.index]
@@ -113,6 +146,10 @@ def main():
         "columns": list(F.columns),
         "value_cols": value_cols,
         "kind": kind,
+        # Every source the matrix was built from, in join order. predict_tile.py runs one
+        # zonal pass per entry and joins them the same way; `kind`/`value_cols` above describe
+        # only the last one and exist for bundles written before this key did.
+        "sources": [(name, cols) for name, _, cols in sources],
         "target": args.target,
         "classes": list(clf.classes_),
         "n_train": int(F.shape[0]),
