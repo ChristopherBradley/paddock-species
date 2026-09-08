@@ -1,0 +1,35 @@
+#!/bin/bash
+#PBS -N boundary_nat
+#PBS -P xe2
+#PBS -q normal
+#PBS -l ncpus=1
+#PBS -l mem=32GB
+#PBS -l walltime=04:00:00
+#PBS -l storage=gdata/xe2+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+
+# Cross-tile de-duplication of one national year, after merge_national.pbs.
+# See output/TILE_BOUNDARY_MERGE.md for what the tiles actually do (each 3 km tile's raster is
+# the EPSG:6933 bounding box of its rotated lattice square, so neighbours overlap by ~350 m and
+# every paddock in that band is segmented and classified twice) and for the rule set.
+#
+# SIZING. The Riverina 60 km box (10,304 polygons) peaks at 249 MB RSS and runs in 15 s on one
+# core; a national year is ~1.35 M polygons, ~130x, so 32 GB / 4 h is a ceiling with margin.
+# raster_cut_m opens every tile's composite header once (99,465 small reads) -- that, not the
+# geometry, is the slow part. One job per year; the input is never modified.
+
+set -euo pipefail
+: "${M:?set -v M=}"
+: "${YEAR:?set -v YEAR=}"
+PY=/g/data/xe2/John/geospatenv/bin/python
+IN=$M/national_${YEAR}_crops.gpkg
+OUT=$M/national_${YEAR}_crops_merged.gpkg
+[ -f "$IN" ] || { echo "no merged file at $IN" >&2; exit 1; }
+rm -f "$OUT"
+$PY merge_tile_boundaries.py --in "$IN" --out "$OUT" --aois "$M/aois.csv" --samgeo-dir "$M/samgeo" \
+    --away-csv "$M/boundary_away.csv" --pairs-csv "$M/boundary_pairs.csv" \
+    --summary "$M/boundary_summary.json"
+ls -la "$OUT"
+echo "Done boundary"

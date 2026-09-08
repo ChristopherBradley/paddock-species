@@ -42,6 +42,8 @@
 #                                 #   (the only check that sees a prediction written before
 #                                 #    its segmentation existed — status cannot)
 #   ./run_national.sh merge        # one national GeoPackage (refuses if chunks are incomplete)
+#   ./run_national.sh boundary     # de-duplicate the ~350 m tile-overlap band in the merged file
+#                                 #   -> national_${YEAR}_crops_merged.gpkg (TILE_BOUNDARY_MERGE.md)
 #   ./run_national.sh summary      # per-category polygon count/area for this year, from pred/*.gpkg
 #   ./run_national.sh cost         # SUs billed so far, by stage
 #
@@ -669,6 +671,19 @@ PYEOF
         exit 1
     fi
     qsub -v M=$M,YEAR=$YEAR merge_national.pbs
+    ;;
+boundary)
+    # Post-hoc cross-tile de-duplication of the merged national file. Adjacent tiles' rasters
+    # overlap by ~350 m (each is the EPSG:6933 bbox of a rotated 3 km Albers square), so every
+    # paddock in that band is in the merged file twice, sometimes with two classes, and views
+    # are cut 2 px inside their own raster. merge_tile_boundaries.py resolves ownership by the
+    # lattice square, unions the two views of one paddock, reconciles classes, clips residual
+    # slivers to the owning tile and writes a raster_cut_m quality column. One small CPU job.
+    # Never edits the input; output is national_${YEAR}_crops_merged.gpkg. Rule set, thresholds
+    # and the Riverina evidence: output/TILE_BOUNDARY_MERGE.md.
+    IN=$M/national_${YEAR}_crops.gpkg
+    [ -f "$IN" ] || { echo "no merged file at $IN — run '$0 merge' first" >&2; exit 1; }
+    qsub -v M=$M,YEAR=$YEAR boundary_national.pbs
     ;;
 summary)
     # Per-category polygon count and area, for comparing one year against another (and against

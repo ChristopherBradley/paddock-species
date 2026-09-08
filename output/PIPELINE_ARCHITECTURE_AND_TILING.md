@@ -153,23 +153,42 @@ hyperparameter (3 km tiles: 2.02 polygons/km², 14.9 ha median; 9 km tiles: 1.56
 segmented at, keeping train/inference consistent — **not** for cost (9 km tiles are only 1.17x
 cheaper, so cost was explicitly not the deciding factor, `TILE_SIZE_BENCHMARK.md` §4).
 
-## 4. Tile overlap: none
+## 4. Tile overlap: ~350 m on every side (corrected 2026-09-08)
 
-Tiles are laid out **edge-to-edge with no overlap and no gap**. `nlum_tiles.py:69` sets
-`edge = 2 * half_m` and feeds it directly as the grid `resolution` — i.e. tile centres are
-spaced by exactly one tile-width, and `TILE_SIZE_BENCHMARK.md:29` states this explicitly:
-"tiles each parent exactly — no gap, no overlap." Confirmed at the imagery-read level too:
-`samgeo_segment.py:156-157` queries Sentinel-2 with `x=(cx-half_m, cx+half_m), y=(cy-half_m,
-cy+half_m)` — an exact square, no buffer term anywhere in the function or its callers.
+**The earlier version of this section said "none". That was wrong, and the reason is worth
+recording.** `nlum_tiles.py:69` does lay the tile *centres* out edge-to-edge (`edge = 2 *
+half_m`, an exact 3 km lattice in EPSG:3577, centre residual 0.06 m over all 99,465 tiles), and
+`samgeo_segment.py:177` does query an exact 3 km square in EPSG:3577. But the same call asks the
+datacube to return the raster in `output_crs="EPSG:6933"` (line 180). The 3 km Albers square is
+rotated ~6.6° in EPSG:6933 at Riverina longitudes, and datacube fills the whole *bounding box* of
+the rotated square, so every composite is 351 x 316 px at 10 m (11.1 km² instead of 9.0) and
+reaches past its lattice square by ~170 m at mid-edge and ~350 m at the corners. Adjacent
+rasters therefore overlap in a band ~350-700 m wide, and a paddock in that band is segmented and
+classified independently by both tiles. Measured directly (`merge_tile_boundaries.py`, Riverina
+60 km box, 2024): 67 % of polygons extend past their own lattice square (max 353 m), 24 % have
+their centroid outside it, and 15.6 % of the summed polygon area is double-counted.
 
-The national merge (`merge_national.pbs:29-41`) is a **pure concatenation**: every tile's
-prediction chunk is appended into one national GeoPackage with `ogr2ogr -append`, with a
-spatial index built afterward purely for query speed. There is no clip-to-tile-core step, no
-cross-tile polygon deduplication, and no boundary-reconciliation pass anywhere in the pipeline.
+SAM's polygons stop 2 px (~20 m) inside the raster edge: a histogram of raw `_segment.gpkg`
+vertex columns over 40 tiles spikes 25x at px 2 and px 350 and shows no excess at the columns
+where a *neighbour's* raster edge falls (`output/figures/tile_boundary_merge/raw_sam_edge_histogram.png`).
+So the boundary artefact is **duplication plus truncation at the tile's own raster edge**, not a
+clean cut at the lattice line, and the two tiles' views of one paddock overlap by the width of
+the band. That overlap is what makes the post-hoc merge in `output/TILE_BOUNDARY_MERGE.md`
+possible: the two views can be matched by intersection, and their union is the whole paddock.
+
+The national merge (`merge_national.pbs`) is still a pure concatenation with no de-duplication;
+`run_national.sh boundary` (added 2026-09-08) runs the de-duplication as a separate step and
+writes `national_<year>_crops_merged.gpkg` beside the raw merge.
 
 ## 5. Why boundary artifacts aren't usually obvious — and why the duplicate-class paddocks you found are real
 
-**The mechanism is real, not a data error.** Because tiles abut with zero overlap and each
+**Note (2026-09-08): the premise of this paragraph — zero overlap — is wrong; see the corrected §4.
+The rasters overlap by ~350 m, so a straddling paddock is usually seen by BOTH tiles (each view
+cut at that tile's own raster edge, ~170-350 m past the lattice line) rather than cut once at the
+line. The measurements below still stand as measurements; their interpretation is superseded by
+`output/TILE_BOUNDARY_MERGE.md`.**
+
+**The mechanism as originally described.** Because tiles abut with zero overlap and each
 tile's Sentinel-2 read is bounded exactly to its own square, a real paddock that straddles a
 tile boundary gets cut by the read window itself. SAM then segments each fragment
 independently within its own tile's `SamGeo.generate()` call, producing two separate polygons
@@ -226,6 +245,11 @@ not a separate measurement:**
   your screenshot shows. Extracted for the overlap test below (§6).
 
 ## 6. Overlap experiment — does a buffered AOI fix the split?
+
+**Note (2026-09-08):** this experiment predates the discovery that the production rasters already
+overlap (§4). Its finding — that a wider window does not reliably recover a clean whole paddock,
+because SAM may absorb the fragment into a compactness-rejected blob — is exactly the failure
+mode that leaves the *residual* cuts after the post-hoc merge (`TILE_BOUNDARY_MERGE.md` §5).
 
 **Status: complete. Two PBS jobs, gpuvolta queue — job 177786687 (2026-08-30, 1 pair, 1.84 SU,
 3 min) and job 177801921 (2026-08-31, 3 more pairs, 4.5 min, exit 0). n=4 boundary-split pairs
