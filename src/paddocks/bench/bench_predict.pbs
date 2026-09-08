@@ -1,0 +1,27 @@
+#!/bin/bash
+#PBS -N bench_pred
+#PBS -P xe2
+#PBS -q normal
+#PBS -l ncpus=1
+#PBS -l mem=8GB
+#PBS -l walltime=04:00:00
+#PBS -l storage=gdata/xe2+gdata/v10+gdata/ka08+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+# Benchmark variant of predict_tile.pbs: queue/mem set at qsub time, RSS + cgroup sampled.
+set -euo pipefail
+: "${AOIS:?}" "${POLYDIR:?}" "${MODEL:?}" "${OUT:?}"
+export PROJ_NETWORK=OFF
+export DATACUBE_CONFIG_PATH=/g/data/v10/public/modules/dea/20231204/datacube.conf
+PY=/g/data/xe2/John/geospatenv/bin/python
+cd /home/147/cb8590/Projects/paddock-species/src/paddocks
+mkdir -p "$(dirname "$OUT")"
+echo "BENCH predict job=$PBS_JOBID queue=$PBS_QUEUE aois=$AOIS out=$OUT host=$(hostname) start=$(date +%s)"
+$PY predict_tile.py --aois "$AOIS" --polydir "$POLYDIR" --model "$MODEL" --out "$OUT" \
+    --timings "${OUT%.gpkg}_timings.csv" --no-zarr ${EXTRA_ARGS:-} &
+PID=$!
+bash bench/memsample.sh $PID 20 "${OUT%.gpkg}_memsample.log" &
+wait $PID
+echo "BENCH end=$(date +%s)"
+echo "Done predict_tile"

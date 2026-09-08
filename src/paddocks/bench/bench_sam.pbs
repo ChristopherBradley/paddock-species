@@ -1,0 +1,61 @@
+#!/bin/bash
+#PBS -N bench_sam
+#PBS -P xe2
+#PBS -q gpuvolta
+#PBS -l ncpus=12
+#PBS -l ngpus=1
+#PBS -l mem=90GB
+#PBS -l jobfs=20GB
+#PBS -l walltime=01:30:00
+#PBS -l storage=gdata/xe2+gdata/v10+gdata/ka08+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+# SAM benchmark. Either ONE run (ARM, SRC, AOIS, WORKERS, EXTRA) or a RUNFILE with lines
+#   ARM|SRC|AOIS|EXTRA            (WORKERS=1 for every line)
+# SRC holds the composites; ARM gets symlinks to them and receives masks/gpkgs/timings, so the
+# production directory is never written. WORKERS>1 splits AOIS and runs that many python
+# processes on the one GPU. nvidia-smi is sampled every 5 s into ARM/gpu_<job>.log.
+set -uo pipefail
+PY=/g/data/xe2/John/geospatenv/bin/python
+cd /home/147/cb8590/Projects/paddock-species/src/paddocks
+JOB=${PBS_JOBID%%.*}
+run_one () {
+    local ARM=$1 SRC=$2 AOIS=$3 EXTRA=$4 WORKERS=${5:-1}
+    mkdir -p "$ARM"
+    for stub in $(tail -n +2 "$AOIS" | cut -d, -f1); do
+        [ -e "$ARM/$stub.tif" ] || ln -s "$SRC/$stub.tif" "$ARM/$stub.tif"
+    done
+    nvidia-smi --query-gpu=timestamp,utilization.gpu,memory.used --format=csv,noheader -l 5 > "$ARM/gpu_$JOB.log" 2>/dev/null &
+    local NV=$!
+    local t0=$(date +%s)
+    echo "BENCH sam job=$JOB arm=$ARM src=$SRC aois=$AOIS workers=$WORKERS extra='$EXTRA' start=$t0"
+    if [ "$WORKERS" -gt 1 ]; then
+        local n=$(($(wc -l < "$AOIS") - 1))
+        local per=$(( (n + WORKERS - 1) / WORKERS ))
+        head -1 "$AOIS" > "$ARM/hdr.csv"
+        tail -n +2 "$AOIS" | split -l $per -d - "$ARM/part_"
+        local pids=""
+        for f in "$ARM"/part_*; do
+            [ -s "$f" ] || continue
+            cat "$ARM/hdr.csv" "$f" > "$f.csv"
+            BENCH_WORKER=1 $PY samgeo_segment.py segment --aois "$f.csv" --outdir "$ARM" $EXTRA > "$f.log" 2>&1 &
+            pids="$pids $!"
+        done
+        wait $pids
+    else
+        $PY samgeo_segment.py segment --aois "$AOIS" --outdir "$ARM" $EXTRA
+    fi
+    local rc=$?
+    kill $NV 2>/dev/null
+    echo "BENCH sam arm=$ARM elapsed=$(( $(date +%s) - t0 )) rc=$rc"
+}
+if [ -n "${RUNFILE:-}" ]; then
+    while IFS='|' read -r ARM SRC AOIS EXTRA; do
+        [ -n "$ARM" ] && run_one "$ARM" "$SRC" "$AOIS" "$EXTRA" 1
+    done < "$RUNFILE"
+else
+    : "${ARM:?}" "${SRC:?}" "${AOIS:?}"
+    run_one "$ARM" "$SRC" "$AOIS" "${EXTRA:-}" "${WORKERS:-1}"
+fi
+echo "Done bench_sam"

@@ -1,0 +1,26 @@
+#!/bin/bash
+#PBS -N bench_preseg
+#PBS -P xe2
+#PBS -q normal
+#PBS -l ncpus=1
+#PBS -l mem=4GB
+#PBS -l walltime=03:00:00
+#PBS -l storage=gdata/xe2+gdata/v10+gdata/ka08+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+# Benchmark variant of presegment.pbs: queue/mem set at qsub time (-q/-l), RSS + cgroup sampled.
+set -euo pipefail
+: "${AOIS:?}" "${OUTDIR:?}"
+export PROJ_NETWORK=OFF
+export DATACUBE_CONFIG_PATH=/g/data/v10/public/modules/dea/20231204/datacube.conf
+PY=/g/data/xe2/John/geospatenv/bin/python
+cd /home/147/cb8590/Projects/paddock-species/src/paddocks
+mkdir -p "$OUTDIR"
+echo "BENCH presegment job=$PBS_JOBID queue=$PBS_QUEUE aois=$AOIS outdir=$OUTDIR host=$(hostname) start=$(date +%s)"
+$PY samgeo_segment.py presegment --aois "$AOIS" --outdir "$OUTDIR" &
+PID=$!
+bash bench/memsample.sh $PID 20 "$OUTDIR/memsample_${PBS_JOBID%%.*}.log" &
+wait $PID
+echo "BENCH end=$(date +%s)"
+echo "Done presegment"

@@ -72,6 +72,13 @@ AOIS=$M/aois.csv
 POLY=$M/samgeo
 CH=$M/chunks
 NCHUNK=${NCHUNK:-320}
+# Extra flags for every SAM job (sam / resam / repair-sam), output/BENCH_KSU.md 2026-09-09:
+#   --prompt-image-only  drops the SAM prompt points that fall on samgeo's zero padding around
+#                        each composite: 2.5x less GPU time per tile, polygons IDENTICAL to the
+#                        2022-2024 production runs (2,467/2,467 at IoU >= 0.9). Default.
+#   --fp16               a further 1.5x, 99.6 % identical polygons. Opt in per year and record it.
+# SAM_EXTRA="" reproduces the exact 2022-2024 code path.
+SAM_EXTRA=${SAM_EXTRA---prompt-image-only}
 PER_SAM=${PER_SAM:-8}          # presegment chunks per SAM job -> 40 GPU jobs
 LANES=${LANES:-64}             # max presegment/predict jobs running at once (datacube pooler)
 
@@ -228,7 +235,7 @@ PYEOF
         IDS=$(for b in $part; do awk -v b="$b" '$1==b {print $2}' $M/chunkjobs.txt; done \
               | tr '\n' ':' | sed 's/:$//')
         [ -n "$IDS" ] && DEP="-W depend=afterany:$IDS" || DEP=""
-        JID=$(qsub $DEP -l walltime=04:00:00 -v AOIS=$M/sam/s$k.csv,OUTDIR=$POLY \
+        JID=$(qsub $DEP -l walltime=04:00:00 -v "AOIS=$M/sam/s$k.csv,OUTDIR=$POLY,SAM_EXTRA=$SAM_EXTRA" \
               -N sam_s$k sam_segment.pbs)
         # Record which GPU job covers which chunks, so `predict` can depend on exactly the one
         # that produces its polygons instead of waiting for the whole GPU stage.
@@ -503,7 +510,7 @@ PYEOF
         IDS=$(for b in $part; do awk -v b="$b" '$1==b {print $2}' $M/repair/jobs.txt; done \
               | tr '\n' ':' | sed 's/:$//')
         [ -n "$IDS" ] && DEP="-W depend=afterany:$IDS" || DEP=""
-        JID=$(qsub $DEP -l walltime=04:00:00 -v AOIS=$M/repair/sam/s$k.csv,OUTDIR=$POLY \
+        JID=$(qsub $DEP -l walltime=04:00:00 -v "AOIS=$M/repair/sam/s$k.csv,OUTDIR=$POLY,SAM_EXTRA=$SAM_EXTRA" \
               -N rs_s$k sam_segment.pbs)
         for b in $part; do echo "$b ${JID%%.*}" >> $M/repair/sam/jobmap.txt; done
         i=$((i + PER_SAM)); k=$((k + 1)); room=$((room - 1))
@@ -644,7 +651,7 @@ PYEOF
         # No lane chaining: unlike presegment/predict, SAM never touches the DEA connection
         # pooler (it only reads composite .tif files already on disk), so there is nothing here
         # for chaining to protect — PBS's own scheduler manages gpuvolta concurrency.
-        JID=$(qsub -l walltime=02:00:00 -v AOIS="$f",OUTDIR=$POLY -N rsm_$b sam_segment.pbs)
+        JID=$(qsub -l walltime=02:00:00 -v "AOIS=$f,OUTDIR=$POLY,SAM_EXTRA=$SAM_EXTRA" -N rsm_$b sam_segment.pbs)
         echo "$b ${JID%%.*}" >> $M/resam/jobs.txt
         i=$((i + 1)); room=$((room - 1))
     done

@@ -42,5 +42,7 @@ if [ -n "${SEED_FROM:-}" ]; then
 fi
 echo "sam_segment AOIS=$AOIS OUTDIR=$OUTDIR ncpus=${PBS_NCPUS:-?}"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null || echo "no GPU"
-$PY samgeo_segment.py segment --aois "$AOIS" --outdir "$OUTDIR"
+# SAM_EXTRA: optional segment flags (e.g. "--fp16 --prompt-image-only", see output/BENCH_KSU.md);
+# empty reproduces the 2022-2024 production segmentation exactly.
+$PY samgeo_segment.py segment --aois "$AOIS" --outdir "$OUTDIR" ${SAM_EXTRA:-}
 echo "Done sam_segment"

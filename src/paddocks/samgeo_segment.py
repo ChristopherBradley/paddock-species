@@ -47,6 +47,7 @@ shipped --min-area-ha 10 / --max-area-ha 1500 filter behave like 1 ha / 150 ha. 
 uses the correct conversion, so its area thresholds are not interchangeable with theirs.
 """
 import argparse
+import contextlib
 import csv
 import json
 import os
@@ -82,6 +83,8 @@ def log_timing(outdir, stage, row):
 
     The job id keeps the writers apart; read a stage back with a glob."""
     job = os.environ.get("PBS_JOBID", str(os.getpid())).split(".")[0]
+    if os.environ.get("BENCH_WORKER"):          # several workers share one PBS job: one file each
+        job = f"{job}_{os.getpid()}"
     path = os.path.join(outdir, f"timings_{stage}_{job}.csv")
     new = not os.path.exists(path)
     with open(path, "a", newline="") as fh:
@@ -225,6 +228,7 @@ def sam_kwargs(args):
         "stability_score_thresh": args.stability_score_thresh,
         "crop_n_layers": args.crop_n_layers,
         "min_mask_region_area": args.min_mask_region_area,
+        "points_per_batch": getattr(args, "points_per_batch", None),
     }.items() if v is not None}
     return kw or None
 
@@ -340,17 +344,71 @@ def do_segment(args):
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     # The whole point of batching: this is paid once, not once per AOI.
     t = time.time()
-    sam = SamGeo(model_type="vit_h", checkpoint=args.checkpoint, sam_kwargs=sam_kwargs(args))
+    kw = sam_kwargs(args)
+
+    def image_only_grid(W, H):
+        """Prompt points that fall on the composite (plus one grid cell of margin) inside the
+        samgeo canvas: sample window + 2 x bound, read boundless with zero fill."""
+        import numpy as np
+        ss = args.sample_size or 512
+        bd = 128 if args.bound is None else args.bound
+        canvas = ss + 2 * bd
+        if W > ss or H > ss:
+            raise SystemExit("--prompt-image-only assumes one samgeo window per composite")
+        n = args.points_per_side or 32
+        g = (np.arange(n) + 0.5) / n
+        pts = np.array([(x, y) for y in g for x in g])
+        x0, y0, x1, y1 = bd / canvas, bd / canvas, (bd + W) / canvas, (bd + H) / canvas
+        keep = ((pts[:, 0] >= x0 - 1 / n) & (pts[:, 0] <= x1 + 1 / n) &
+                (pts[:, 1] >= y0 - 1 / n) & (pts[:, 1] <= y1 + 1 / n))
+        return pts[keep], canvas
+    if getattr(args, "prompt_image_only", False):
+        # samgeo reads each 512 px window with a 128 px boundless margin, so a 3 km composite
+        # (351 x 316 px) sits in a 768 px canvas of which 81 % is zero padding -- and SAM's
+        # points_per_side grid prompts the padding too. Keep only the grid points that fall on
+        # the image (plus one grid cell of margin), for the canvas the FIRST composite implies.
+        # Only valid when every composite in the job has (nearly) the same pixel size.
+        import rasterio
+        with rasterio.open(aoi_paths(args.outdir, todo[0]["stub"])["tif"]) as src:
+            W, H = src.width, src.height
+        grid, canvas = image_only_grid(W, H)
+        kw = dict(kw or {})
+        kw["points_per_side"] = None          # the constructor defaults to 32; SAM insists on exactly one
+        kw["point_grids"] = [grid]
+        n = args.points_per_side or 32
+        print(f"prompt grid restricted to the image: {len(grid)} of {n * n} points "
+              f"(composite {W}x{H} px in a {canvas} px canvas); rebuilt per composite", flush=True)
+    sam = SamGeo(model_type="vit_h", checkpoint=args.checkpoint, sam_kwargs=kw)
     load_s = time.time() - t
     print(f"SAM on {dev}, model load {load_s:.0f}s, {len(todo)} AOIs to segment", flush=True)
-    print(f"sam_kwargs={sam_kwargs(args)}", flush=True)
+    print(f"sam_kwargs={ {k: (v if k != 'point_grids' else f'{len(v[0])} points') for k, v in (kw or {}).items()} }", flush=True)
 
     for i, a in enumerate(todo, 1):
         p = aoi_paths(args.outdir, a["stub"])
         t = time.time()
         try:
-            sam.generate(p["tif"], p["mask"], batch=True, foreground=True,
-                         erosion_kernel=(3, 3), mask_multiplier=255)
+            gen_kw = dict(batch=not getattr(args, "no_batch", False), foreground=True,
+                          erosion_kernel=(3, 3), mask_multiplier=255)
+            if gen_kw["batch"]:
+                # samgeo splits the composite into sample_size windows read with `bound` px of
+                # context on every side and writes back only the centre (common.py:1095), so
+                # seams INSIDE a tile are stitched with context; only the outer raster edge cuts.
+                if getattr(args, "sample_size", None):
+                    gen_kw["sample_size"] = (args.sample_size, args.sample_size)
+                if getattr(args, "bound", None) is not None:
+                    gen_kw["bound"] = args.bound
+            else:
+                gen_kw["unique"] = False     # binary + erosion, same downstream as the batch path
+            if getattr(args, "prompt_image_only", False):
+                # composite pixel size varies a little with latitude (EPSG:6933 scale), so the
+                # grid is rebuilt for every composite; the generator reads point_grids at call time
+                import rasterio
+                with rasterio.open(p["tif"]) as src:
+                    sam.mask_generator.point_grids = [image_only_grid(src.width, src.height)[0]]
+            ctx = (torch.autocast(device_type="cuda", dtype=torch.float16)
+                   if getattr(args, "fp16", False) and dev == "cuda" else contextlib.nullcontext())
+            with ctx:
+                sam.generate(p["tif"], p["mask"], **gen_kw)
             seg_s = time.time() - t
             t2 = time.time()
             sam.tiff_to_gpkg(p["mask"], p["gpkg"], simplify_tolerance=None)
@@ -455,6 +513,18 @@ def main():
     p2.add_argument("--aois", required=True)
     p2.add_argument("--outdir", required=True)
     p2.add_argument("--force", action="store_true")
+    # Benchmark knobs (output/BENCH_KSU.md). All default to the production behaviour.
+    p2.add_argument("--sample-size", type=int, default=None,
+                    help="samgeo batch window edge in px (library default 512)")
+    p2.add_argument("--bound", type=int, default=None,
+                    help="context read around each window, px (library default 128)")
+    p2.add_argument("--no-batch", action="store_true",
+                    help="one SAM pass over the whole composite (resized to 1024 px)")
+    p2.add_argument("--points-per-batch", type=int, default=None,
+                    help="prompts decoded per GPU batch (library default 64)")
+    p2.add_argument("--fp16", action="store_true", help="torch.autocast float16 around generate")
+    p2.add_argument("--prompt-image-only", action="store_true",
+                    help="drop SAM prompt points that fall on samgeo's zero padding around the composite")
     p2.add_argument("--max-missing-frac", type=float, default=0.10,
                     help="abort the job (non-zero exit) if more than this fraction of AOIs have "
                          "no pre-segment composite. Distinct from --max-fail-frac: that catches "

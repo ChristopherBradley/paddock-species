@@ -154,9 +154,15 @@ class Lattice:
         half = float(aois.half_m.iloc[0])
         if not (aois.half_m == half).all():
             raise SystemExit("aois.csv has mixed half_m; the lattice is not a single grid")
-        self.half, self.E = half, 2 * half
         to_alb = Transformer.from_crs("EPSG:4326", "EPSG:3577", always_xy=True)
         x, y = to_alb.transform(aois.lon.values, aois.lat.values)
+        # Lattice spacing from the centres themselves, so tiles wider than their spacing (an
+        # explicit overlap, half_m > spacing/2) still get a core of spacing/2. Production tiles
+        # have half_m == spacing/2 and this reduces to E = 2 * half_m.
+        ux = np.unique(np.round(x)); dx = np.diff(ux); dx = dx[dx > 100]
+        E = float(np.median(dx)) if len(dx) else 2 * half
+        self.E = float(round(E)); self.half = self.E / 2
+        self.tile_half = half            # the query half-width (raster reach), for reporting
         self.ox = float(np.median(x % self.E))
         self.oy = float(np.median(y % self.E))
         kx = np.round((x - self.ox) / self.E).astype(int)

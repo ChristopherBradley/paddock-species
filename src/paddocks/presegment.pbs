@@ -1,14 +1,17 @@
 #!/bin/bash
 #PBS -N presegment
 #PBS -P xe2
-#PBS -q normal
+#PBS -q normalbw
 #PBS -l ncpus=1
-#PBS -l mem=4GB
+#PBS -l mem=8GB
 #PBS -l walltime=02:00:00
 #PBS -l storage=gdata/xe2+gdata/v10+gdata/ka08+scratch/xe2
 #PBS -l wd
 #PBS -o /scratch/xe2/cb8590/paddock-species-logs/
 #PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+# QUEUE: normalbw bills 8 GB on 1 CPU as one core (1.25 SU/h) where normal bills it as two (4.0 SU/h);
+# this stage's process RSS peaks near 0.5 GB and its outputs are bit-identical across queues
+# (output/BENCH_KSU.md, 2026-09-09), so the queue is only a price.
 
 # Stage 1: Fourier-of-NDWI composites. Pure datacube I/O + one FFT — NO GPU.
 # On `normal` the charge is max(ncpus, mem/4GB) x 2 SU/hr, so 1 CPU / 4 GB is the cheapest
