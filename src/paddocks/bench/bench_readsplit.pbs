@@ -1,0 +1,20 @@
+#!/bin/bash
+#PBS -N bench_readsplit
+#PBS -P xe2
+#PBS -q normalbw
+#PBS -l ncpus=1
+#PBS -l mem=16GB
+#PBS -l walltime=02:00:00
+#PBS -l storage=gdata/xe2+gdata/v10+gdata/ka08+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+set -uo pipefail
+export PROJ_NETWORK=OFF DATACUBE_CONFIG_PATH=/g/data/v10/public/modules/dea/20231204/datacube.conf
+PY=/g/data/xe2/John/geospatenv/bin/python
+cd /home/147/cb8590/Projects/paddock-species/src/paddocks
+: "${B:?}" "${D:?}"
+echo "BENCH readsplit start=$(date +%s)"
+$PY bench/read_split.py --aois $B/aois/p9.csv --polydir $B/fx_p9 --out $B/readsplit_p9.csv
+$PY bench/read_split.py --aois $B/aois/ch8.csv --polydir $D/national2024/samgeo --out $B/readsplit_3km.csv
+echo "Done readsplit"

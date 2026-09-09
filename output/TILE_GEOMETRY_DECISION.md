@@ -5,7 +5,7 @@ Generated 2026-09-09 by `src/paddocks/bench/geometry_report.py` from `geometry_d
 ## 0. Decision
 
 - **Recommended for a from-scratch re-run: `p9` — 9 km tiles, no overlap.** See §5 for why, and §6 for the commands.
-- Cost per national year: 2,176 SU vs 2,476 SU for 3 km tiles at the same optimised settings (2024 as actually run: 6,623 SU).
+- Cost per national year: 2,500 SU vs 2,904 SU for 3 km tiles at the same optimised settings (2024 as actually run: 6,623 SU).
 - Edge artefacts after the merge: classified polygons with a raster-edge cut 0.155 vs 0.569; residual overlap 2.37 % vs 1.07 % of area; band density ratio 1.15 vs 1.04.
 - Agreement with the merged production block: 75 % of production polygons have a match at IoU >= 0.5 (65 % at 0.7); class agrees on 92 % of matched pairs.
 
@@ -24,14 +24,14 @@ Generated 2026-09-09 by `src/paddocks/bench/geometry_report.py` from `geometry_d
 
 Per-tile seconds measured in this round (SAM: fp16 + image-only prompts, alone on a V100; presegment and predict on normalbw, all arms of a stage in the same time window so contention is shared), scaled to the national tile count of each lattice. Rates: gpuvolta 36 SU/h, normalbw 1.25 SU/h per tile-job.
 
-| arm | presegment s/tile | SAM s/tile | predict s/tile | presegment SU | SAM SU | predict SU | **total SU / year** | vs 3 km optimised | vs 2024 as run |
+| arm | presegment s/tile | SAM wall s/tile (GPU s) | predict s/tile | presegment SU | SAM SU | predict SU | **total SU / year** | vs 3 km optimised | vs 2024 as run |
 |---|---|---|---|---|---|---|---|---|---|
-| prod_3km | 10.0 | 0.80 | 38.6 | 345 | 796 | 1,335 | **2,476** | 100 % | 37 % |
-| ov2000 | 13.5 | 2.10 | 35.5 | 466 | 2,089 | 1,224 | **3,779** | 153 % | 57 % |
-| ov2500 | 19.4 | 2.90 | 62.5 | 670 | 2,884 | 2,160 | **5,714** | 231 % | 86 % |
-| p9 | 54.9 | 8.55 | 91.3 | 305 | 1,365 | 506 | **2,176** | 88 % | 33 % |
-| p9ov1000 | 86.7 | 10.10 | 212.6 | 481 | 1,613 | 1,179 | **3,273** | 132 % | 49 % |
-| p9ov2000 | 69.0 | 11.25 | 152.2 | 383 | 1,796 | 844 | **3,023** | 122 % | 46 % |
+| prod_3km | 10.0 | 1.23 (0.80) | 38.6 | 345 | 1,224 | 1,335 | **2,904** | 100 % | 44 % |
+| ov2000 | 13.5 | 2.65 (2.10) | 35.5 | 466 | 2,633 | 1,224 | **4,323** | 149 % | 65 % |
+| ov2500 | 19.4 | 3.54 (2.90) | 62.5 | 670 | 3,517 | 2,160 | **6,347** | 219 % | 96 % |
+| p9 | 54.9 | 10.57 (8.55) | 91.3 | 305 | 1,689 | 506 | **2,500** | 86 % | 38 % |
+| p9ov1000 | 86.7 | 12.10 (10.10) | 212.6 | 481 | 1,932 | 1,179 | **3,592** | 124 % | 54 % |
+| p9ov2000 | 69.0 | 13.35 (11.25) | 152.2 | 383 | 2,131 | 844 | **3,358** | 116 % | 51 % |
 
 ## 3. Edge artefacts and product statistics after the merge (block interior)
 
@@ -73,8 +73,8 @@ Merge-rule variant: `--cover-min 0` (never rescue an away view; drop it even whe
 | p9ov2000 | no rescue | 0.048 | 0.00 | 0.98 | 14,916 | 0.731 |
 
 **Findings.**
-- *Extra overlap on the 3 km lattice does not reduce edge artefacts and costs more.* With 1 km / 2 km overlap, 63 % / 74 % of polygons are away views; with real classes the merge cannot resolve most of the extra pairs (one side abstained, or two truncated views of a paddock wider than the overlap), so residual overlap is 7.92 % / 14.36 % of area (production 1.07 %) and the raster-edge cut share rises to 0.767 / 0.697 (production 0.569). Dropping every away view instead (no rescue) brings overlap to 5.19 % / 4.13 % but discards 4 % / 8 % of classified area. SAM time per tile rises from 0.80 to 2.10 / 2.90 s (more image in the canvas means more prompts and masks even with the prompt fix), so the year costs 153 % / 231 % of the optimised 3 km run.
-- *9 km tiles are cheaper and cleaner.* Per tile the stages cost more, but there are 6 x fewer tiles and the per-tile overhead of the datacube query dominates presegment and predict: 2,176 SU per year (88 % of optimised 3 km, 33 % of 2024 as run) with a raster-edge cut share of 0.155 against 0.569, the same classified area (17,094 vs 17,034 ha) and no class conflicts left after the merge. The national 9 km grid has 15,968 parents rather than 99,465 / 9 because blocks at the cropping margin are partial; a mixed 3 km / 9 km grid for those margins would recover most of the difference but needs a two-lattice merge, not built.
+- *Extra overlap on the 3 km lattice does not reduce edge artefacts and costs more.* With 1 km / 2 km overlap, 63 % / 74 % of polygons are away views; with real classes the merge cannot resolve most of the extra pairs (one side abstained, or two truncated views of a paddock wider than the overlap), so residual overlap is 7.92 % / 14.36 % of area (production 1.07 %) and the raster-edge cut share rises to 0.767 / 0.697 (production 0.569). Dropping every away view instead (no rescue) brings overlap to 5.19 % / 4.13 % but discards 4 % / 8 % of classified area. SAM time per tile rises from 1.23 to 2.65 / 3.54 s (more image in the canvas means more prompts and masks even with the prompt fix), so the year costs 149 % / 219 % of the optimised 3 km run.
+- *9 km tiles are cheaper and cleaner.* Per tile the stages cost more, but there are 6 x fewer tiles and the per-tile overhead of the datacube query dominates presegment and predict: 2,500 SU per year (86 % of optimised 3 km, 38 % of 2024 as run) with a raster-edge cut share of 0.155 against 0.569, the same classified area (17,094 vs 17,034 ha) and no class conflicts left after the merge. The national 9 km grid has 15,968 parents rather than 99,465 / 9 because blocks at the cropping margin are partial; a mixed 3 km / 9 km grid for those margins would recover most of the difference but needs a two-lattice merge, not built.
 - *Overlap on top of 9 km buys little under the default merge* (cut share 0.156 / 0.150, more residual overlap, 40-50 % more cost). With no rescue, 11 km tiles on the 9 km lattice reach a cut share of 0.048 and 0.00 % overlap, the cleanest geometry measured, but lose 12 % of classified area to dropped views the owner never segmented. That is the option if seam-free geometry matters more than coverage.
 - *Agreement with production is the same for every candidate* (72-75 % of production polygons at IoU >= 0.5, 92 % class agreement on matches): any change to what SAM sees changes about a quarter of the boundaries. §5 looks at which side is right where they differ.
 

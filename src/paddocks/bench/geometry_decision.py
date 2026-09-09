@@ -130,6 +130,24 @@ def score(g, prod, interior, lat, band_m=500):
     return res
 
 
+def sam_wall_per_tile(B, arm_dir_name):
+    """Wall seconds per tile of a SAM arm = (job elapsed - model load) / tiles, from the BENCH line
+    the bench_sam.pbs job wrote. segment_s alone misses the composite read, polygonise, filter and
+    GeoPackage write, which add 20-50 % (BENCH_KSU.md sec 2 priced by job SU, which includes them)."""
+    import re
+    LOGS = "/scratch/xe2/cb8590/paddock-species-logs"
+    jobs = [l.split()[1].split(".")[0] for l in open(f"{B}/jobs.txt") if l.strip() and l.split()[0] in ("fx1", "fx2", "sam_grid_fp16")]
+    for jid in jobs:
+        for f in glob.glob(f"{LOGS}/{jid}.gadi-pbs.OU"):
+            for line in open(f, errors="replace"):
+                m = re.search(r"BENCH sam arm=(\S+) elapsed=(\d+)", line)
+                if m and m.group(1).rstrip("/").endswith("/" + arm_dir_name):
+                    fs = glob.glob(f"{B}/{arm_dir_name}/timings_segment_*.csv")
+                    t = pd.concat([pd.read_csv(x) for x in fs])
+                    return (float(m.group(2)) - float(t.model_load_s.iloc[0])) / len(t), int(len(t))
+    return None
+
+
 def per_tile_s(pattern, col):
     fs = glob.glob(pattern)
     if not fs:
@@ -203,7 +221,8 @@ def main():
         E, half = arms[name][3], arms[name][4]
         n_tiles = N_TILES_3KM * (3000 / E) ** 2
         stub_prefix = {"prod_3km": "nlum_2024", "ov2000": "ov2000", "ov2500": "ov2500", "p9": "p9_", "p9ov1000": "p9ov1000", "p9ov2000": "p9ov2000"}[name]
-        seg = per_tile_s(f"{B}/fx_{name if name != 'prod_3km' else 'ch36'}/timings_segment_*.csv", "segment_s")
+        seg = sam_wall_per_tile(B, f"fx_{name if name != 'prod_3km' else 'ch36'}")
+        seg_gpu = per_tile_s(f"{B}/fx_{name if name != 'prod_3km' else 'ch36'}/timings_segment_*.csv", "segment_s")
         ps = per_tile_s(f"{B}/tiles/timings_presegment_*.csv", "seconds") if name != "prod_3km" else per_tile_s(f"{B}/ps2021_bw8/timings_presegment_*.csv", "seconds")
         if name != "prod_3km":
             fs = glob.glob(f"{B}/tiles/timings_presegment_*.csv")
@@ -212,6 +231,7 @@ def main():
         pr = per_tile_s(f"{B}/pred_fx_{name}/*_timings.csv", "total_s") if name != "prod_3km" else per_tile_s(f"{B}/pred_fx_prod36/*_timings.csv", "total_s")
         cost = {}
         if seg: cost["sam_s_per_tile"] = round(seg[0], 2); cost["sam_su_year"] = round(n_tiles * seg[0] / 3600 * 36)
+        if seg_gpu: cost["sam_gpu_s_per_tile"] = round(seg_gpu[0], 2)
         if ps: cost["presegment_s_per_tile"] = round(ps[0], 1); cost["presegment_su_year"] = round(n_tiles * ps[0] / 3600 * 1.25)
         if pr: cost["predict_s_per_tile"] = round(pr[0], 1); cost["predict_su_year"] = round(n_tiles * pr[0] / 3600 * 1.25)
         if seg and ps and pr:

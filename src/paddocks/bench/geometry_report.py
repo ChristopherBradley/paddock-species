@@ -80,12 +80,12 @@ def main():
       "all arms of a stage in the same time window so contention is shared), scaled to the national tile count of each lattice. "
       "Rates: gpuvolta 36 SU/h, normalbw 1.25 SU/h per tile-job.")
     A("")
-    A("| arm | presegment s/tile | SAM s/tile | predict s/tile | presegment SU | SAM SU | predict SU | **total SU / year** | vs 3 km optimised | vs 2024 as run |")
+    A("| arm | presegment s/tile | SAM wall s/tile (GPU s) | predict s/tile | presegment SU | SAM SU | predict SU | **total SU / year** | vs 3 km optimised | vs 2024 as run |")
     A("|---|---|---|---|---|---|---|---|---|---|")
     base = P["cost"].get("total_su_year")
     for k in arms:
         c = G[k]["cost"]; t = c.get("total_su_year")
-        A(f"| {k} | {fmt(c.get('presegment_s_per_tile'), 1)} | {fmt(c.get('sam_s_per_tile'), 2)} | {fmt(c.get('predict_s_per_tile'), 1)} | "
+        A(f"| {k} | {fmt(c.get('presegment_s_per_tile'), 1)} | {fmt(c.get('sam_s_per_tile'), 2)} ({fmt(c.get('sam_gpu_s_per_tile'), 2)}) | {fmt(c.get('predict_s_per_tile'), 1)} | "
           f"{fmt(c.get('presegment_su_year'), 0)} | {fmt(c.get('sam_su_year'), 0)} | {fmt(c.get('predict_su_year'), 0)} | **{fmt(t, 0)}** | "
           f"{fmt(100 * t / base, 0) if (t and base) else '—'} % | {fmt(100 * t / ACTUAL_2024, 0) if t else '—'} % |")
     A("")

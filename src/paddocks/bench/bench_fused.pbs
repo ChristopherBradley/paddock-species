@@ -1,0 +1,43 @@
+#!/bin/bash
+#PBS -N bench_fused
+#PBS -P xe2
+#PBS -q gpuvolta
+#PBS -l ncpus=12
+#PBS -l ngpus=1
+#PBS -l mem=90GB
+#PBS -l jobfs=20GB
+#PBS -l walltime=00:45:00
+#PBS -l storage=gdata/xe2+gdata/v10+gdata/ka08+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+# Co-scheduling test: SAM on the GPU while WORKERS predict processes read the datacube on the
+# node's spare cores. Compare each side's per-tile time with its solo baseline.
+set -uo pipefail
+export PROJ_NETWORK=OFF DATACUBE_CONFIG_PATH=/g/data/v10/public/modules/dea/20231204/datacube.conf
+PY=/g/data/xe2/John/geospatenv/bin/python
+cd /home/147/cb8590/Projects/paddock-species/src/paddocks
+: "${B:?}" "${D:?}" "${WORKERS:?}"
+for stub in $(tail -n +2 $B/aois/fused_sam.csv | cut -d, -f1); do
+  for src in $B/tiles $D/national2024/samgeo; do [ -f $src/$stub.tif ] && { [ -e $B/fused_sam/$stub.tif ] || ln -s $src/$stub.tif $B/fused_sam/$stub.tif; }; done
+done
+nvidia-smi --query-gpu=timestamp,utilization.gpu,memory.used --format=csv,noheader -l 5 > $B/fused_sam/gpu_${PBS_JOBID%%.*}.log 2>/dev/null &
+NV=$!
+( while true; do echo "$(date +%s) $(cat /proc/loadavg | cut -d' ' -f1-3)" >> $B/fused_sam/load_${PBS_JOBID%%.*}.log; sleep 15; done ) &
+LD=$!
+EX="--max-area-ha 300 --crop-gate-amp 0.35 --crop-gate-shape $D/models/phenology_gate.joblib --shape-gate-skip-classes Canola Cereal Legume --yield-model $D/models/cereal_yield.joblib"
+t0=$(date +%s); echo "BENCH fused start=$t0 workers=$WORKERS"
+pids=""
+for i in $(seq -f "%02g" 0 $((WORKERS-1))); do
+  [ -f $B/aois/fused_pred_$i.csv ] || continue
+  $PY predict_tile.py --aois $B/aois/fused_pred_$i.csv --polydir $B/fused_poly --model $D/models/group3_map_sharma6.joblib \
+      --out $B/fused_pred/p$i.gpkg --timings $B/fused_pred/p${i}_timings.csv --zarr-out $B/fused_pred/p$i.zarr $EX > $B/fused_pred/p$i.log 2>&1 &
+  pids="$pids $!"
+done
+tp=$(date +%s)
+$PY samgeo_segment.py segment --aois $B/aois/fused_sam.csv --outdir $B/fused_sam --prompt-image-only --fp16 > $B/fused_sam/sam.log 2>&1
+ts=$(date +%s); echo "BENCH sam done in $((ts-tp)) s"
+wait $pids
+te=$(date +%s); echo "BENCH predict workers done in $((te-tp)) s; total $((te-t0)) s"
+kill $NV $LD 2>/dev/null
+echo "Done bench_fused"
