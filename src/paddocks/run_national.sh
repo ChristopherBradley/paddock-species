@@ -67,7 +67,7 @@ export PROJ_NETWORK=OFF
 
 YEAR=${YEAR:-2024}
 GRID_FROM=${GRID_FROM:-2024}   # which year's aois.csv `grid` copies from
-M=$D/national$YEAR
+M=${M:-$D/national$YEAR}   # override for a second tiling of the same year, e.g. M=$D/national2024_9km
 AOIS=$M/aois.csv
 POLY=$M/samgeo
 CH=$M/chunks

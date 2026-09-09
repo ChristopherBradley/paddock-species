@@ -304,6 +304,33 @@ def do_presegment(args):
             f"— check for datacube connection errors and re-submit with fewer concurrent jobs.")
 
 
+def _full_grid(n):
+    import numpy as np
+    g = (np.arange(n) + 0.5) / n
+    return np.array([(x, y) for y in g for x in g])
+
+
+def _install_image_only_prompts(mask_generator, n):
+    """Wrap SamAutomaticMaskGenerator.generate so the prompt grid covers only the window's
+    non-zero (image) extent, plus one grid cell of margin, in normalised coordinates."""
+    import numpy as np
+    base = _full_grid(n)
+    orig = mask_generator.generate
+
+    def generate(image, *a, **k):
+        h, w = image.shape[:2]
+        nz = np.asarray(image).reshape(h, w, -1).any(axis=2)
+        rows, cols = np.where(nz.any(axis=1))[0], np.where(nz.any(axis=0))[0]
+        if len(rows) == 0:
+            return []
+        y0, y1, x0, x1 = rows[0] / h, (rows[-1] + 1) / h, cols[0] / w, (cols[-1] + 1) / w
+        keep = ((base[:, 0] >= x0 - 1 / n) & (base[:, 0] <= x1 + 1 / n) &
+                (base[:, 1] >= y0 - 1 / n) & (base[:, 1] <= y1 + 1 / n))
+        mask_generator.point_grids = [base[keep]]
+        return orig(image, *a, **k)
+    mask_generator.generate = generate
+
+
 def do_segment(args):
     os.makedirs(args.outdir, exist_ok=True)
     aois = read_aois(args.aois)
@@ -345,40 +372,21 @@ def do_segment(args):
     # The whole point of batching: this is paid once, not once per AOI.
     t = time.time()
     kw = sam_kwargs(args)
-
-    def image_only_grid(W, H):
-        """Prompt points that fall on the composite (plus one grid cell of margin) inside the
-        samgeo canvas: sample window + 2 x bound, read boundless with zero fill."""
-        import numpy as np
-        ss = args.sample_size or 512
-        bd = 128 if args.bound is None else args.bound
-        canvas = ss + 2 * bd
-        if W > ss or H > ss:
-            raise SystemExit("--prompt-image-only assumes one samgeo window per composite")
-        n = args.points_per_side or 32
-        g = (np.arange(n) + 0.5) / n
-        pts = np.array([(x, y) for y in g for x in g])
-        x0, y0, x1, y1 = bd / canvas, bd / canvas, (bd + W) / canvas, (bd + H) / canvas
-        keep = ((pts[:, 0] >= x0 - 1 / n) & (pts[:, 0] <= x1 + 1 / n) &
-                (pts[:, 1] >= y0 - 1 / n) & (pts[:, 1] <= y1 + 1 / n))
-        return pts[keep], canvas
     if getattr(args, "prompt_image_only", False):
-        # samgeo reads each 512 px window with a 128 px boundless margin, so a 3 km composite
-        # (351 x 316 px) sits in a 768 px canvas of which 81 % is zero padding -- and SAM's
-        # points_per_side grid prompts the padding too. Keep only the grid points that fall on
-        # the image (plus one grid cell of margin), for the canvas the FIRST composite implies.
-        # Only valid when every composite in the job has (nearly) the same pixel size.
-        import rasterio
-        with rasterio.open(aoi_paths(args.outdir, todo[0]["stub"])["tif"]) as src:
-            W, H = src.width, src.height
-        grid, canvas = image_only_grid(W, H)
-        kw = dict(kw or {})
-        kw["points_per_side"] = None          # the constructor defaults to 32; SAM insists on exactly one
-        kw["point_grids"] = [grid]
+        # samgeo reads every sample window with `bound` px of boundless (zero-filled) margin, so
+        # a 3 km composite (351 x 316 px) sits in a 768 px canvas that is 81 % zero padding, and
+        # SAM's points_per_side grid prompts the padding too (752 of 1,024 points decode nothing).
+        # The generator is built with an explicit grid and the grid is rebuilt for every window
+        # from the window's own non-zero extent (+ one grid cell), so it is right for any tile
+        # size, for multi-window composites and for the padded edge windows of big tiles.
         n = args.points_per_side or 32
-        print(f"prompt grid restricted to the image: {len(grid)} of {n * n} points "
-              f"(composite {W}x{H} px in a {canvas} px canvas); rebuilt per composite", flush=True)
+        kw = dict(kw or {})
+        kw["points_per_side"] = None          # SAM insists on exactly one of the two
+        kw["point_grids"] = [_full_grid(n)]
+        print(f"prompt grid restricted to each window's image content ({n}x{n} base grid)", flush=True)
     sam = SamGeo(model_type="vit_h", checkpoint=args.checkpoint, sam_kwargs=kw)
+    if getattr(args, "prompt_image_only", False):
+        _install_image_only_prompts(sam.mask_generator, args.points_per_side or 32)
     load_s = time.time() - t
     print(f"SAM on {dev}, model load {load_s:.0f}s, {len(todo)} AOIs to segment", flush=True)
     print(f"sam_kwargs={ {k: (v if k != 'point_grids' else f'{len(v[0])} points') for k, v in (kw or {}).items()} }", flush=True)
@@ -399,12 +407,6 @@ def do_segment(args):
                     gen_kw["bound"] = args.bound
             else:
                 gen_kw["unique"] = False     # binary + erosion, same downstream as the batch path
-            if getattr(args, "prompt_image_only", False):
-                # composite pixel size varies a little with latitude (EPSG:6933 scale), so the
-                # grid is rebuilt for every composite; the generator reads point_grids at call time
-                import rasterio
-                with rasterio.open(p["tif"]) as src:
-                    sam.mask_generator.point_grids = [image_only_grid(src.width, src.height)[0]]
             ctx = (torch.autocast(device_type="cuda", dtype=torch.float16)
                    if getattr(args, "fp16", False) and dev == "cuda" else contextlib.nullcontext())
             with ctx:
@@ -524,7 +526,8 @@ def main():
                     help="prompts decoded per GPU batch (library default 64)")
     p2.add_argument("--fp16", action="store_true", help="torch.autocast float16 around generate")
     p2.add_argument("--prompt-image-only", action="store_true",
-                    help="drop SAM prompt points that fall on samgeo's zero padding around the composite")
+                    help="prompt only each window's image content, not samgeo's zero padding "
+                         "(2.5x less GPU time on 3 km tiles, identical polygons; BENCH_KSU.md)")
     p2.add_argument("--max-missing-frac", type=float, default=0.10,
                     help="abort the job (non-zero exit) if more than this fraction of AOIs have "
                          "no pre-segment composite. Distinct from --max-fail-frac: that catches "

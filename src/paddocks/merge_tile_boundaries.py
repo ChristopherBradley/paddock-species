@@ -290,7 +290,8 @@ def main():
                     help="only polygons whose bbox comes within this of their own core edge can "
                          "touch another tile's raster (national max overshoot measured 500.3 m)")
     ap.add_argument("--cover-min", type=float, default=0.5,
-                    help="away polygon covered by >= this fraction by home-tile polygons -> not rescued")
+                    help="away polygon covered by >= this fraction by home-tile polygons -> not rescued; "
+                         "0 = never rescue (right when tiles overlap by more than a paddock width)")
     ap.add_argument("--dup-full", type=float, default=0.95,
                     help="coverage >= this -> pure duplicate, dropped; below it (and >= cover-min) "
                          "the away polygon is unioned into its twin when classes are compatible")
@@ -424,6 +425,15 @@ def main():
         if cover < args.cover_min:
             rec["decision"], rec["reason"] = "rescue", "uncovered"
             updates.setdefault(r["fid"], dict(absorbed=[], conflict=0, classes=[]))["rescued"] = True
+            away_recs.append(rec)
+            continue
+        if not inters:
+            # only reachable with --cover-min 0 (no rescue): an away view of ground the owning
+            # tile did not segment at all. With a wide overlap the owner saw that ground whole, so
+            # its silence is a decision; drop the view rather than keep a truncated duplicate.
+            rec["decision"], rec["reason"] = "drop_partial", "no_twin_no_rescue"
+            rec["lost_ha"] = round(r["area_ha"], 3)
+            dropped.add(r["fid"])
             away_recs.append(rec)
             continue
         twf = int(rec["twin_fid"])
