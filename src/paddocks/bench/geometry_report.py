@@ -179,8 +179,8 @@ def main():
     A("## 7. Files")
     A("")
     A(f"- Figures: `{a.fig_dir}/` — `compare_*.png` (same windows, production merged vs {R} merged), `disagree_{R}.png` (the review windows).")
-    A(f"- Example GeoPackages (block interior, EPSG:3577, crops schema + merge provenance columns): `examples/tile_geometry/prod_3km_merged.gpkg` and "
-      f"`examples/tile_geometry/{R}_merged.gpkg`; the unmerged inputs beside them as `*_before.gpkg`.")
+    A(f"- Example GeoPackages (block interior, EPSG:3577, crops schema + merge provenance columns): `tile_geometry_examples/prod_3km_merged.gpkg` and "
+      f"`tile_geometry_examples/{R}_merged.gpkg`; the unmerged inputs beside them as `*_before.gpkg`.")
     A("- Numbers: `derived/benchksu/decision/geometry_decision.json`; per-arm merge and audit outputs under `derived/benchksu/decision/<arm>/`.")
     A("")
     with open(a.out, "w") as f:

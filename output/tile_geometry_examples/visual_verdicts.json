@@ -1,0 +1,22 @@
+{
+  "windows": [
+    {"window": "p9_dis1 (1368750, -3848250)", "what": "Production splits the top-left paddock along the vertical 3 km line into a union (798) plus a separate fragment (446); 9 km has it as one polygon (220) bounded by the visible tracks.", "verdict": "production fragment, 9 km right"},
+    {"window": "p9_dis2 (1359750, -3852750)", "what": "One large dark-green paddock is cut into four quadrants by the 3 km lattice cross in production (177/189/208/238), none unioned; 9 km has one polygon (133).", "verdict": "production fragment, 9 km right"},
+    {"window": "p9_dis3 (1368750, -3849750)", "what": "Production's union at the lattice cross (797) is an irregular shape spanning three visible fields; 9 km gives rectangles that follow the roads (234/238/239/255).", "verdict": "production fragment, 9 km right"},
+    {"window": "p9_dis4 (1367250, -3849750)", "what": "A block of small rectangular paddocks; both products draw them, with one small paddock merged with its neighbour in production (459) and split in 9 km (245/246).", "verdict": "both plausible"},
+    {"window": "p9_dis5 (1361250, -3845250)", "what": "Same treed paddock in both (106 vs 40), near-identical outline; production calls it Legume, 9 km calls it Canola. Geometry agrees, the class does not.", "verdict": "geometry both fine, class differs (undecidable here)"},
+    {"window": "p9_dis6 (1365750, -3846750)", "what": "A large pale-green paddock with scattered trees: production splits it at the horizontal line into a union (793) and a second polygon (790); 9 km holds it as one union across its own line (634).", "verdict": "production fragment, 9 km right"}
+  ],
+  "summary": "The disagreements concentrate on production's 3 km lattice lines. In four of the six windows the production polygons are lattice-aligned fragments that the merge could not fully restore (the two views did not overlap enough, or one view was abstained), and the 9 km polygons follow the field boundaries visible in the true-colour scene. One window is a genuine draw and one is a class disagreement on the same geometry. Nothing in these windows looked like a paddock the 9 km tiling had broken or over-merged. At the block centre (`compare_p9_centre.png`, not selected for disagreement) the two products are close, with 61 vs 70 polygons and fewer fragments in the 9 km version.",
+  "commands": [
+    "# 1. the 9 km grid from the 2024 3 km grid (15,968 parents; partial parents at the cropping margin keep their 3x3 block centre)",
+    "python grid9_from_2024.py --aois-2024 $D/national2024/aois.csv --year 2024 --out $D/national2024_9km/aois.csv",
+    "# 2. the normal stages, in their own directory (M override added to run_national.sh), NCHUNK ~ 60 so each predict job holds ~270 tiles",
+    "export M=$D/national2024_9km; YEAR=2024 NCHUNK=60 ./run_national.sh chunks",
+    "YEAR=2024 ./run_national.sh presegment      # normalbw 8 GB (presegment.pbs); 9 km composite RSS 1.8 GB",
+    "SAM_EXTRA=\"--prompt-image-only --fp16\" YEAR=2024 ./run_national.sh sam     # ~8.6 s per 9 km tile on a V100",
+    "YEAR=2024 ./run_national.sh predict         # normalbw 8 GB (predict_tile.pbs); 9 km predict RSS 6.6 GB -- watch the first chunk",
+    "YEAR=2024 ./run_national.sh merge && YEAR=2024 ./run_national.sh boundary && YEAR=2024 ./run_national.sh summary",
+    "# 3. compare with the retired 3 km 2024 map after ITS boundary step: abs_compare.py on both, and bench/geometry_decision.py-style IoU matching"
+  ]
+}

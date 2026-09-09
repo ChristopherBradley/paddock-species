@@ -121,6 +121,6 @@ YEAR=2024 ./run_national.sh merge && YEAR=2024 ./run_national.sh boundary && YEA
 ## 7. Files
 
 - Figures: `figures/tile_geometry/` — `compare_*.png` (same windows, production merged vs p9 merged), `disagree_p9.png` (the review windows).
-- Example GeoPackages (block interior, EPSG:3577, crops schema + merge provenance columns): `examples/tile_geometry/prod_3km_merged.gpkg` and `examples/tile_geometry/p9_merged.gpkg`; the unmerged inputs beside them as `*_before.gpkg`.
+- Example GeoPackages (block interior, EPSG:3577, crops schema + merge provenance columns): `tile_geometry_examples/prod_3km_merged.gpkg` and `tile_geometry_examples/p9_merged.gpkg`; the unmerged inputs beside them as `*_before.gpkg`.
 - Numbers: `derived/benchksu/decision/geometry_decision.json`; per-arm merge and audit outputs under `derived/benchksu/decision/<arm>/`.
 
