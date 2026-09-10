@@ -81,6 +81,15 @@ def feature_count(gpkg, layer):
     raise RuntimeError(f"could not parse feature count from: {out}")
 
 
+def fid_max(gpkg, layer):
+    out = subprocess.run([OGRINFO, "-q", gpkg, "-sql", f"SELECT MAX(fid) AS m FROM {layer}"],
+                          capture_output=True, text=True, check=True).stdout
+    for line in out.splitlines():
+        if line.strip().startswith("m ("):
+            return int(line.split("=")[1].strip())
+    raise RuntimeError(f"could not parse max fid from: {out}")
+
+
 def shard_ranges(n_features, n_shards):
     """(lo, hi) fid ranges, inclusive/exclusive, covering 1..n_features with no gaps or overlap."""
     size = -(-n_features // n_shards)  # ceil
@@ -176,8 +185,12 @@ def main():
     args = ap.parse_args()
 
     n = feature_count(args.gpkg, args.layer)
-    ranges = shard_ranges(n, args.n_shards)
-    print(f"{n:,} features -> {len(ranges)} shards of ~{ranges[0][1] - ranges[0][0]:,} each")
+    # Shard on the fid extent, not the count. A boundary-merged file (merge_tile_boundaries.py)
+    # deletes duplicate rows, so its fids have gaps and max(fid) > n. Ranges built from n
+    # would silently leave out every row above fid n.
+    top = fid_max(args.gpkg, args.layer)
+    ranges = shard_ranges(top, args.n_shards)
+    print(f"{n:,} features, fid 1..{top:,} -> {len(ranges)} shards of ~{ranges[0][1] - ranges[0][0]:,} fids each")
 
     os.makedirs(args.stage_dir, exist_ok=True)
     shards = [(f"p{i:03d}", lo, hi) for i, (lo, hi) in enumerate(ranges)]
