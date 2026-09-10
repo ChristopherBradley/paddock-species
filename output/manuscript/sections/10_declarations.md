@@ -12,7 +12,7 @@ The GRDC/National Variety Trial ground-truth data used for training and validati
 
 The classified-only national output map is releasable. The full national output, which also carries per-polygon provenance fields used during development, will be checked for residual site-level linkage before release; none is expected.
 
-Model artefacts (the crop classifier and the Cereal yield model) contain no site-level records and are releasable. The phenology-gate model evaluated in Section 5.4 and rejected is retained for reproducibility of that experiment but is not part of the deployed pipeline.
+Model artefacts (the crop classifier and the cereal yield model) contain no site-level records and are releasable. The phenology-gate model evaluated in Section 5.4 and rejected is retained for reproducibility of that experiment but is not part of the deployed pipeline.
 
 ABS and ABARES reference statistics used for validation are already public and require no release action.
 

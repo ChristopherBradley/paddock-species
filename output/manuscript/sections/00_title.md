@@ -14,7 +14,7 @@ A National, Field-Level Crop-Species Map of Australia from Sentinel-2
 
 **Manuscript type**: Research Paper - Remote Sensing of Environment
 
-**Draft status**: PARTIAL (see DRAFT_README.md). Every classifier result and map statistic is from the three-index model superseded on 2026-09-08; the 2024 national re-run with the adopted classifier is in progress (Section 7.1, Limitation 10).
+**Draft status**: PARTIAL (see DRAFT_README.md). Every number marked XXX is a map-derived result awaiting the 2024 national re-run with the adopted nine-index classifier and the revised 9 km tile geometry (launched 2026-09-10); Section 5.1 already reports the adopted classifier.
 
 *Two alternative framings considered (`PAPER_PLAN.md` §21), not used:*
 - *"Segmentability as a Crop-Presence Signal: A National Three-Class Crop Map of Australia and the Cost of a Stricter Presence Gate" - leads with the phenology-gate finding rather than the dataset; better suited if RSE reviewers push toward a more methods-forward framing in review.*

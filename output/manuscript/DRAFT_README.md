@@ -20,7 +20,14 @@ Per this skill's Phase 2 decision rule: ≥60% of core claims in `PAPER_PLAN.md`
 - Three cross-reference errors fixed: Section 3.1 pointed at Limitation 1 for single-season coverage (it is Limitation 4); Section 4.6 pointed at Section 5.2 for the Legume over-prediction (it is 5.3); Section 4.1 now names Limitation 3.
 - Table 2's last row had the following paragraph glued onto it; split.
 - `sections_revised/` deleted: it was a 2026-09-04 snapshot of `sections/` (the review loop applied its fixes in place, per `REVISION_LOG.md`), and every later edit lived only in `sections/`.
-- Not done: the Results/Methods rewrite for the adopted model and the 9 km geometry (waits on the re-run); `paper-covert` (both `output/submission*/` packages date from 2026-09-04 and are stale).
+- Not done: `paper-covert` (both `output/submission*/` packages date from 2026-09-04 and are stale).
+
+## 2026-09-10 second pass (user requests): XXX placeholders, lowercase class names, AgriWebb removed
+
+- Every map-derived number from the first national map (polygon and tile counts, classified share, ABS validation r/MAE/area ratios/class decomposition and Table 3, legume share, WorldCereal/NLUM agreement figures, regional multi-year shares/amplitudes/polygon stability, the ABS yield calibration factor and its check) is now `XXX`, to be filled from the 2024 re-run. Figures 2, 3, 4, 5, 7a and 8 carry `[XXX: regenerate]` markers. `grep -c XXX MANUSCRIPT_DRAFT.md` counts what is left.
+- Section 5.1 and Table 2 report the adopted nine-index classifier (`output/GROUP3_MODEL_shipped_plus_sharma6.md`, independently reviewed): macro F1 0.890/0.892, per-class P/R/F1 and confusion counts. The three-index to nine-index gain is reported as an ablation in 5.1 (and Section 4.3 now describes both feature-set stages), so Limitation 10, Table 8 and Future Work item 6 are gone; Future Work 7 is now 6 and the Conclusion has two open threads, not three. Design-stage ablations measured with the three-index set (Presto, hand-review gain, nine-species 0.38, phenology-gate experiment on the earlier 3 km regional run, Sentinel-1 task dependence, canola-yield feasibility, Table 5) are kept and say which feature set or run they used.
+- Class names canola/cereal/legume (and wheat/barley/oat) are lowercase except at sentence starts and in table header cells.
+- Every AgriWebb-derived statement is removed: the grazing-negative-class story (78.5% hard stratum) in 4.4 and 6.4, and the geometric-filter retention figures in 3.4 (77.9%/65%/22% were measured on AgriWebb paddocks; the retention against NVT trial paddocks is now `XXX`).
 
 ## What changed since `PAPER_PLAN.md` was written (2026-08-29)
 
