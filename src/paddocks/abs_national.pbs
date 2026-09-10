@@ -39,14 +39,14 @@ export NUMPY_MADVISE_HUGEPAGE=0
 PY=/g/data/xe2/John/geospatenv/bin/python
 REPO=/home/147/cb8590/Projects/paddock-species
 D=/scratch/xe2/cb8590/paddock-species-data/derived
-M=$D/national$YEAR
+M=${M:-$D/national$YEAR}     # override with -v M= for a non-default run dir (e.g. national2024_9km)
 cd $REPO/src/paddocks
 
 $PY abs_compare.py \
-    --pred "$M/pred/p*.gpkg" \
+    --pred "${PRED:-$M/pred/p*.gpkg}" \
     --abs $D/abs/abs_broadacre_area.csv \
     --sa2 $D/abs/SA2_2021_AUST_GDA2020.shp \
     --abares $D/abs/abares_state_area.csv \
     --aois $M/aois.csv \
-    --out $REPO/output/ABS_COMPARISON_NATIONAL_$YEAR.md
+    --out "${OUT:-$REPO/output/ABS_COMPARISON_NATIONAL_$YEAR.md}"
 echo "Done abs_compare national $YEAR"

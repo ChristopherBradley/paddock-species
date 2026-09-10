@@ -13,7 +13,8 @@
 // ---------------------------------------------------------------------------------------
 // Field names in these tables: area_ha, compact, abstain, stub, year, poly_idx, ndvi_amp,
 // pred, confidence, p_canola, p_cereal, p_legume, n_obs, clear_frac, treed_frac, n_feat.
-var FOLDER = 'projects/ee-christopher-bradley/assets/paddock_species_national_2024_crops';
+// 9 km adopted map (2026-09-10). The retired 3 km map is still at .../paddock_species_national_2024_crops.
+var FOLDER = 'projects/ee-christopher-bradley/assets/paddock_species_national_2024_9km_crops';
 var SHARD_IDS = [
   'p000', 'p001', 'p002', 'p003', 'p004', 'p005', 'p006', 'p007', 'p008', 'p009',
   'p010', 'p011', 'p012', 'p013', 'p014', 'p015', 'p016', 'p017', 'p018', 'p019'

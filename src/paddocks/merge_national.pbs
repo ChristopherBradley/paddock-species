@@ -44,6 +44,7 @@ for f in $M/pred/p*.gpkg; do
     [ $((n % 25)) -eq 0 ] && echo "merged $n chunks"
 done
 echo "merged $n chunks"
+[ "$n" -gt 0 ] || { echo "FATAL: no non-empty $M/pred/p*.gpkg to merge" >&2; exit 1; }
 
 echo "building spatial index"
 ogrinfo "$OUT" -sql "SELECT CreateSpatialIndex('crops','geom')" >/dev/null

@@ -1,0 +1,65 @@
+#!/bin/bash
+#PBS -N cmp_nat
+#PBS -P xe2
+#PBS -q normalbw
+#PBS -l ncpus=4
+#PBS -l mem=32GB
+#PBS -l walltime=04:00:00
+#PBS -l storage=gdata/xe2+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+
+# Every comparison of one finished national year that does not need the ABS job's 32 GB sjoin,
+# run after `boundary`. Aggregate outputs go to output/, anything site-level stays in $M/compare/
+# under a *_SENSITIVE name.
+#   1. paddock centroids of the de-duplicated map -> WorldCereal and NLUM point comparisons
+#   2. trial-site retention (does a 2024 trial sit inside a retained polygon; geometry only --
+#      the production classifier saw every trial, so F1 from this map would be in-sample)
+#   3. the retired 3 km map against this one, de-duplicated and before de-duplication
+# One step failing does not stop the others; each step's exit code is printed.
+#
+#   qsub -v M=$D/national2024_9km,YEAR=2024 compare_national.pbs
+
+set -uo pipefail
+# numpy hints MADV_HUGEPAGE on every large array and gadi runs THP defrag=madvise (synchronous
+# compaction on those faults, node-dependent stalls; PROJ_NOTES 2026-09-09).
+export NUMPY_MADVISE_HUGEPAGE=0 PROJ_NETWORK=OFF
+: "${M:?set -v M=}"
+: "${YEAR:?set -v YEAR=}"
+PY=/g/data/xe2/John/geospatenv/bin/python
+REPO=/home/147/cb8590/Projects/paddock-species
+D=/scratch/xe2/cb8590/paddock-species-data/derived
+cd $REPO/src/paddocks
+MERGED=$M/national_${YEAR}_crops_merged.gpkg
+PRE=$M/national_${YEAR}_crops.gpkg
+OLD=${OLD:-$D/national${YEAR}/national_${YEAR}_crops.gpkg}
+TAG=${TAG:-${YEAR}_9km}
+C=$M/compare; mkdir -p $C
+step() { echo "=== $(date +%T) $1: rc=$2"; }
+
+$PY - "$MERGED" "$C/national_${YEAR}_centroids.csv" <<'PYEOF'
+import sys, geopandas as gpd
+g = gpd.read_file(sys.argv[1], layer="crops")
+c = g.geometry.centroid
+g.assign(cx=c.x, cy=c.y)[["pred", "abstain_reason", "cx", "cy"]].to_csv(sys.argv[2], index=False)
+print(f"{len(g):,} centroids (EPSG:{g.crs.to_epsg()}) -> {sys.argv[2]}")
+PYEOF
+step centroids $?
+$PY worldcereal_compare.py --centroids $C/national_${YEAR}_centroids.csv --out $REPO/output/WORLDCEREAL_COMPARISON_$TAG.md
+step worldcereal $?
+$PY nlum_compare.py --centroids $C/national_${YEAR}_centroids.csv --out $REPO/output/NLUM_COMPARISON_$TAG.md
+step nlum $?
+$PY eval_map_at_sites.py --sites $D/benchksu/validation/sites_SENSITIVE.csv --pred $MERGED --layer crops \
+    --aois $M/aois.csv --year $YEAR --name national_$TAG \
+    --out-json $C/sites_$TAG.json --out-sites $C/sites_${TAG}_SENSITIVE.csv
+step sites $?
+$PY compare_maps.py --a $OLD --a-name "3 km (retired)" --b $MERGED --b-name "9 km (adopted, de-duplicated)" \
+    --aois $M/aois.csv --n-windows 300 \
+    --out-md $REPO/output/MAP_COMPARISON_3KM_VS_9KM_$YEAR.md --out-json $C/map_compare_merged.json
+step compare_merged $?
+$PY compare_maps.py --a $OLD --a-name "3 km (retired)" --b $PRE --b-name "9 km (adopted, before de-duplication)" \
+    --aois $M/aois.csv --n-windows 300 \
+    --out-md $C/MAP_COMPARISON_3KM_VS_9KM_${YEAR}_preboundary.md --out-json $C/map_compare_pre.json
+step compare_pre $?
+echo "Done compare_national"

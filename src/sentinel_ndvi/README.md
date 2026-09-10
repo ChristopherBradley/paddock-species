@@ -64,12 +64,6 @@ python3 threshold_report.py \
     --ts-dir /scratch/xe2/cb8590/paddock-species-data/derived/sentinel_ts \
     --out    /scratch/xe2/cb8590/paddock-species-data/derived/threshold_report.md
 
-# 5c. Optional visual check — CFI/NDVI season traces, canola vs wheat (SENSITIVE output,
-#     anonymised labels, stays on /scratch)
-python3 plot_timeseries.py \
-    --ts-dir /scratch/xe2/cb8590/paddock-species-data/derived/sentinel_ts \
-    --outdir /scratch/xe2/cb8590/paddock-species-data/derived/figures --n-per-crop 10
-
 # 6. Derive verdicts (thresholds are flags: --cfi-flower-min/--flower-start/--flower-end)
 python3 phenology_check.py \
     --ts-dir /scratch/xe2/cb8590/paddock-species-data/derived/sentinel_ts \

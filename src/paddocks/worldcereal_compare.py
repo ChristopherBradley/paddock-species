@@ -58,9 +58,11 @@ def main():
     ap.add_argument("--n-sample", type=int, default=250_000)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--centroids", default=CENTROIDS,
+                    help="CSV of pred,abstain_reason,cx,cy (EPSG:3577) for the map being scored")
     args = ap.parse_args()
 
-    df = pd.read_csv(CENTROIDS)
+    df = pd.read_csv(args.centroids)
     n_total = len(df)
     df["cat"] = df["pred"].where(df["pred"].notna() & (df["pred"] != ""), "Abstained")
 
