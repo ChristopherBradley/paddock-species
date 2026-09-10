@@ -26,6 +26,10 @@
 # ~75s on 12 CPUs.
 set -euo pipefail
 export PROJ_NETWORK=OFF
+# numpy hints MADV_HUGEPAGE on every large array and gadi runs THP defrag=madvise, so the kernel
+# compacts memory synchronously on those faults: the same 9 km tile ran predict's zonal step in
+# 22-25 s with this off vs 41-396 s with it on, all in system time (PROJ_NOTES 2026-09-09).
+export NUMPY_MADVISE_HUGEPAGE=0
 export OMP_NUM_THREADS=1
 PY=/g/data/xe2/John/geospatenv/bin/python
 D=/scratch/xe2/cb8590/paddock-species-data/derived

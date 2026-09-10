@@ -23,6 +23,9 @@
 # unusable on a file this size without it, so it is not optional.
 
 set -euo pipefail
+# numpy hints MADV_HUGEPAGE on every large array and gadi runs THP defrag=madvise (synchronous
+# compaction on those faults, node-dependent stalls; PROJ_NOTES 2026-09-09).
+export NUMPY_MADVISE_HUGEPAGE=0
 : "${M:?set -v M=}"
 module load gdal/3.7.3
 

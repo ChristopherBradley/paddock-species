@@ -17,6 +17,9 @@
 # production directory is never written. WORKERS>1 splits AOIS and runs that many python
 # processes on the one GPU. nvidia-smi is sampled every 5 s into ARM/gpu_<job>.log.
 set -uo pipefail
+# numpy hints MADV_HUGEPAGE on every large array and gadi runs THP defrag=madvise (synchronous
+# compaction on those faults, node-dependent stalls; PROJ_NOTES 2026-09-09).
+export NUMPY_MADVISE_HUGEPAGE=0
 PY=/g/data/xe2/John/geospatenv/bin/python
 cd /home/147/cb8590/Projects/paddock-species/src/paddocks
 JOB=${PBS_JOBID%%.*}
