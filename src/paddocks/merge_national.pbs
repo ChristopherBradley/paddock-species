@@ -27,9 +27,10 @@ set -euo pipefail
 # compaction on those faults, node-dependent stalls; PROJ_NOTES 2026-09-09).
 export NUMPY_MADVISE_HUGEPAGE=0
 : "${M:?set -v M=}"
+: "${YEAR:?set -v YEAR=}"
 module load gdal/3.7.3
 
-OUT=$M/national_2024_crops.gpkg
+OUT=$M/national_${YEAR}_crops.gpkg
 rm -f "$OUT"
 n=0
 for f in $M/pred/p*.gpkg; do
