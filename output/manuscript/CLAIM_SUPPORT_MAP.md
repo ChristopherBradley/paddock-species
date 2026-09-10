@@ -14,7 +14,7 @@ Every non-trivial numeric or empirical claim in `MANUSCRIPT_DRAFT.md`, mapped to
 | Cereal yield RMSE 1.21 t/ha; calibration 0.6248, checked +3.1%/+18.1% | `YIELD_cereal_pooled.md`, `YIELD_CALIBRATION.md` | High | 5.7 |
 | ABS/ABARES median 6.8% mutual disagreement | `ABS_COMPARISON_100km.md` | High — stated floor | 1, 3.3, 7.1 |
 | 9-yr regional polygon stability, median IoU 0.84, found 7/9 years | `POLYGON_STABILITY.md` | High | 4.7, 5.6 |
-| 9-yr regional weak years 2017/2018 (classified share, ndvi_amp) | `ABS_COMPARISON_100km.md` | High — direct table | 5.6, 6.5 |
+| 9-yr regional weak years 2017/2018 (classified share, ndvi_amp) | `ABS_COMPARISON_100km.md` | High — direct table | 5.6, 6.6 |
 | Presto loses to hand-built features (0.775 vs 0.821 F1; combined 0.824) | `REVIEWED_MODEL.md` (verified as the exact source, resolving `PAPER_PLAN.md` §24 Open Issue #6's "verify exact source" flag) | High | 2.1, 5.1, 6.3 |
 | AgriWebb Grazing retirement, 78.5% pass-rate finding | `PRESENCE_ONLY_LABELS.md` | High | 4.4, 6.4 |
 | 69.7% of training trials co-located, 31.8% different crop; 3-group collapse resolves 69% | `PAPER_PLAN.md` §8 (sourcing project label-conflict analysis) | High | 4.2 |
@@ -23,9 +23,13 @@ Every non-trivial numeric or empirical claim in `MANUSCRIPT_DRAFT.md`, mapped to
 | **NLUM enrichment: Canola 6.4x oilseed baseline, Legume 1.6x legume baseline** | `output/NLUM_COMPARISON.md` | Medium-High — enrichment-ratio metric constructed to correct a real cross-commodity scale artefact; see that file's own caveats | 5.5 |
 | **NLUM grazing probability: 33.8% at abstained points vs. 10.8% at classified points** | `output/NLUM_COMPARISON.md` | High — large sample, independently corroborates `NONCROP_CLASS.md` | 5.5, 6.1 |
 | **National multi-year (2017-2025) totals/trends** | none yet | **N/A — [PENDING: E8], not fabricated anywhere in the draft** | 3.2, 5.6, 7.1, 8 |
+| *(v1.1)* S1 regresses shipped+sharma6 classifier: −0.023 temporal/−0.018 spatial macro F1, Legume-concentrated | `S1_VS_LATEST_MODEL.md` §1 | High — controlled arm, gain >2x the established seed-noise floor | 6.5, 7.1 |
+| *(v1.1)* S1 improves shipped Cereal yield model: +0.092 temporal/+0.022 spatial R² | `S1_VS_LATEST_MODEL.md` §2, `YIELD_cereal_pooled_ctl.md`/`_s1.md` | High — controlled arm, largest gain on the model's own operational bar | 6.5, 7.1, 7.2 |
+| *(v1.1)* Sharma6 indices regress canola yield: temporal R² 0.206→0.012 | `CANOLA_YIELD_indices_only.md`, `CANOLA_YIELD_shipped_sharma6.md` | High — first regression test of Sharma6 on this target | 6.5 |
+| *(v1.1)* Leading classifier candidate (shipped+sharma6): macro F1 0.890/0.892, canola@5%FPR unchanged (89.0%) | `GROUP3_MODEL_shipped_plus_sharma6_VALIDATION.md` | Medium-High — clean controlled experiment, but **not independently reviewed, not adopted** — reported as a disclosed finding only, never substituted for the shipped model's Results-section numbers | 7.1, 8 |
 | Kirillov et al. 2023, Segment Anything, ICCV 2023, pp. 3992-4003 | Verified via WebSearch during drafting (resolves `PAPER_PLAN.md` §24 Open Issue #6) | High | 2.3, 4.1 |
 | Olofsson et al. 2014, RSE 148:42-57, doi:10.1016/j.rse.2014.02.015 | Verified via WebSearch during drafting | High | 2.4, 4.6, 7.1 |
 | Ashourloo et al. 2019, ISPRS J. Photogramm. Remote Sens. 156:63-76 | Verified via WebSearch during drafting | High | 3.4 |
 | Lawes et al. 2022 (not 2021/2023 as `PAPER_PLAN.md` §22 guessed), Crop & Pasture Science, doi:10.1071/CP21386 | Verified via WebSearch during drafting — year corrected from the plan's placeholder | High | 2.2 |
 
-**Unsupported/weak claims deliberately avoided in this draft** (per `PAPER_PLAN.md` §12): "the pipeline generalizes well across years nationally" (only regionally demonstrated); "canola yield is available" (explicitly not shipped); describing the ABS check as "ground-truth accuracy" (it validates against an independent *aggregate statistic*, itself uncertain by ~6.8%).
+**Unsupported/weak claims deliberately avoided in this draft** (per `PAPER_PLAN.md` §12): "the pipeline generalizes well across years nationally" (only regionally demonstrated); "canola yield is available" (explicitly not shipped); describing the ABS check as "ground-truth accuracy" (it validates against an independent *aggregate statistic*, itself uncertain by ~6.8%); *(v1.1)* "Sentinel-1 improves the map" stated without naming which task (true for yield, false for classification); *(v1.1)* citing the shipped+sharma6 candidate's 0.890/0.892 as "the model's" accuracy anywhere outside Discussion/Limitations — every Results-section number is the shipped 0.821/0.823 model.
