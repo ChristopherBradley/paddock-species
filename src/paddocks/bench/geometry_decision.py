@@ -180,6 +180,8 @@ def main():
         "p9": (f"{B}/pred_fx_p9/pred.gpkg", f"{B}/aois/p9.csv", f"{B}/tiles", 9000, 4500),
         "p9ov1000": (f"{B}/pred_fx_p9ov1000/pred.gpkg", f"{B}/aois/p9ov1000.csv", f"{B}/tiles", 9000, 5000),
         "p9ov2000": (f"{B}/pred_fx_p9ov2000/pred.gpkg", f"{B}/aois/p9ov2000.csv", f"{B}/tiles", 9000, 5500),
+        # the FINAL configuration: EPSG:3577 composites, half_m 4850 (350 m buffer), SAM+predict co-scheduled
+        "p9_3577": (f"{B}/pred_p9_3577/p_*.gpkg", f"{B}/aois/p9_3577.csv", f"{B}/tiles_3577", 9000, 4850),
     }
     out = {"block_km2": round(block.area / 1e6, 1), "interior_km2": round(interior.area / 1e6, 1)}
     merged = {}
@@ -194,9 +196,10 @@ def main():
                 raise SystemExit("run: clip production block first (prod_block_before.gpkg)")
             g = gpd.read_file(src)
         else:
-            if not os.path.exists(pred):
+            pfiles = sorted(glob.glob(pred))
+            if not pfiles:
                 print("skip", name, "(no predictions yet)"); continue
-            g = gpd.read_file(pred, layer="paddocks")
+            g = gpd.GeoDataFrame(pd.concat([gpd.read_file(f, layer="paddocks") for f in pfiles], ignore_index=True), crs="EPSG:3577")
         to_crops(g, before)
         after = f"{wd}/after.gpkg"
         if os.path.exists(after):
@@ -220,15 +223,16 @@ def main():
         # cost per national year (normalbw CPU stages 1.25 SU/h; gpuvolta 36 SU/h)
         E, half = arms[name][3], arms[name][4]
         n_tiles = N_TILES_3KM * (3000 / E) ** 2
-        stub_prefix = {"prod_3km": "nlum_2024", "ov2000": "ov2000", "ov2500": "ov2500", "p9": "p9_", "p9ov1000": "p9ov1000", "p9ov2000": "p9ov2000"}[name]
-        seg = sam_wall_per_tile(B, f"fx_{name if name != 'prod_3km' else 'ch36'}")
-        seg_gpu = per_tile_s(f"{B}/fx_{name if name != 'prod_3km' else 'ch36'}/timings_segment_*.csv", "segment_s")
+        stub_prefix = {"prod_3km": "nlum_2024", "ov2000": "ov2000", "ov2500": "ov2500", "p9": "p9_", "p9ov1000": "p9ov1000", "p9ov2000": "p9ov2000", "p9_3577": "p9b_"}[name]
+        seg = sam_wall_per_tile(B, f"fx_{name if name != 'prod_3km' else 'ch36'}") if name != "p9_3577" else None
+        seg_gpu = per_tile_s(f"{B}/{'tiles_3577' if name == 'p9_3577' else 'fx_' + (name if name != 'prod_3km' else 'ch36')}/timings_segment_*.csv", "segment_s")
         ps = per_tile_s(f"{B}/tiles/timings_presegment_*.csv", "seconds") if name != "prod_3km" else per_tile_s(f"{B}/ps2021_bw8/timings_presegment_*.csv", "seconds")
         if name != "prod_3km":
-            fs = glob.glob(f"{B}/tiles/timings_presegment_*.csv")
+            fs = glob.glob(f"{B}/{'tiles_3577' if name == 'p9_3577' else 'tiles'}/timings_presegment_*.csv")
             t = pd.concat([pd.read_csv(f) for f in fs]); t = t[(t.status == "OK") & t.stub.str.startswith(stub_prefix)]
             ps = (float(t.seconds.median()), int(len(t))) if len(t) else None
-        pr = per_tile_s(f"{B}/pred_fx_{name}/*_timings.csv", "total_s") if name != "prod_3km" else per_tile_s(f"{B}/pred_fx_prod36/*_timings.csv", "total_s")
+        pr = (per_tile_s(f"{B}/pred_p9_3577/timings_predict.csv", "total_s") if name == "p9_3577" else
+              per_tile_s(f"{B}/pred_fx_{name}/*_timings.csv", "total_s") if name != "prod_3km" else per_tile_s(f"{B}/pred_fx_prod36/*_timings.csv", "total_s"))
         cost = {}
         if seg: cost["sam_s_per_tile"] = round(seg[0], 2); cost["sam_su_year"] = round(n_tiles * seg[0] / 3600 * 36)
         if seg_gpu: cost["sam_gpu_s_per_tile"] = round(seg_gpu[0], 2)
@@ -256,7 +260,10 @@ def main():
         rows = [dict(name=f"{name}_dis{i + 1}", x=round((k[0] + 0.5) * cell), y=round((k[1] + 0.5) * cell), half_m=800,
                      note=f"{n} unmatched polygons (IoU<0.5) in this 1.5 km cell") for i, (k, n) in enumerate(top.items())]
         pd.DataFrame(rows).to_csv(f"{O}/{name}{a.suffix}/disagree_windows.csv", index=False)
-    with open(f"{O}/geometry_decision{a.suffix}.json", "w") as f:
+    jp = f"{O}/geometry_decision{a.suffix}.json"
+    if a.only and os.path.exists(jp):      # a partial run adds/refreshes its arms, keeps the rest
+        prev = json.load(open(jp)); prev.update(out); out = prev
+    with open(jp, "w") as f:
         json.dump(out, f, indent=2, default=str)
     print("wrote", f"{O}/geometry_decision.json")
 

@@ -16,6 +16,7 @@ ARM_DESC = {
     "p9": ("9 km tiles, no overlap", "9 km lattice", "4.5 km", "0"),
     "p9ov1000": ("10 km tiles on the 9 km lattice", "9 km lattice", "5.0 km", "1 km"),
     "p9ov2000": ("11 km tiles on the 9 km lattice", "9 km lattice", "5.5 km", "2 km"),
+    "p9_3577": ("9 km lattice, EPSG:3577 composites, 350 m buffer, SAM+predict co-scheduled (FINAL)", "9 km lattice", "4.85 km", "700 m"),
 }
 
 
