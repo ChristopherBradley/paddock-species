@@ -58,3 +58,11 @@ __pycache__/
 .env
 .venv/
 venv/
+
+# ---- LaTeX build byproducts (paper-covert packages; main.pdf is copied to pdf/) ----
+output/submission*/latex/main.aux
+output/submission*/latex/main.bbl
+output/submission*/latex/main.blg
+output/submission*/latex/main.log
+output/submission*/latex/main.out
+output/submission*/latex/main.pdf
