@@ -4,6 +4,18 @@ Written 2026-08-25 (overnight), answering "remind me where we got to with predic
 is this a feasible attribute to add". Source for every accuracy number: `YIELD_MODEL.md`,
 `YIELD_optical.md`, `YIELD_optical_s1.md`, `CANOLA_YIELD_CHECK.md`.
 
+> **UPDATE 2026-08-31.** Two things retested against the models actually in play now, both in
+> `output/S1_VS_LATEST_MODEL.md` and `CANOLA_YIELD_shipped_sharma6.md`: (1) S1 clearly improves
+> the shipped pooled-Cereal yield model (+0.092 R2, temporal — the one part of this doc's story
+> that gets *better* news since 2026-08-25); (2) the Sharma6 indices adopted for the classifier
+> (`GROUP3_MODEL_shipped_plus_sharma6.md`) were tested on canola yield for the first time and
+> **make it worse, not better** — temporal R2 collapses from 0.206 (old 3-index model,
+> satellite+year/state) to 0.012, and the spatial edge over the year+state baseline (0.376 vs
+> 0.316) nearly vanishes (0.322). Sharma6 is a validated win for crop-*type* classification, not
+> a general feature upgrade — it was never tested on a regression target before this, and it
+> regresses one when it is. §5's "do not ship canola yield" verdict stands, now confirmed with
+> the newer features too, not just the original ones.
+
 > **Short answer: yes for cereals, no for canola without Sentinel-1, and it costs almost nothing
 > to compute — but it is not ready to ship, for a reason that is about labels rather than
 > models.** The regression works (wheat R² 0.58 spatial, 0.44 temporal). The features are

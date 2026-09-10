@@ -41,7 +41,7 @@ from sklearn.model_selection import GroupKFold
 from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
 from scipy.stats import pearsonr, spearmanr
 
-from train_species import GROUP, build_features
+from train_species import GROUP, build_features, family, BANDS
 
 
 def load_ts(pat):
@@ -82,6 +82,11 @@ def fit_eval(X, y, tr, te, seed=0):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--indices")
+    ap.add_argument("--bands", help="glob of 10-band time series (extract_paddock.py --all-bands)")
+    ap.add_argument("--bands-keep-families", nargs="*", default=None,
+                     help="with --bands: keep only these derived-index families (e.g. the "
+                          "Sharma6 set ndre2 vi2 vi3 vdvi vci evi2_sharma) after build_features(), "
+                          "same semantics as train_species.py's flag of the same name")
     ap.add_argument("--s1")
     ap.add_argument("--labeled", required=True)
     ap.add_argument("--yields", required=True, help="NVT xlsx")
@@ -104,11 +109,14 @@ def main():
     if args.indices:
         t = load_ts(args.indices)
         sources.append(("indices", t, [c for c in t.columns if c.endswith("_pad_median")]))
+    if args.bands:
+        t = load_ts(args.bands)
+        sources.append(("bands", t, [b for b in BANDS if b in t.columns]))
     if args.s1:
         t = load_ts(args.s1)
         sources.append(("s1", t, [c for c in t.columns if c.endswith("_pad_median")]))
     if not sources:
-        raise SystemExit("give --indices and/or --s1")
+        raise SystemExit("give --indices and/or --bands and/or --s1")
 
     parts = []
     for name, t, cols in sources:
@@ -116,6 +124,13 @@ def main():
         n = t.groupby("TrialCode").size()
         t = t[t.TrialCode.isin(set(n[n >= args.min_obs].index))]
         f = build_features(t, cols, False, lab)
+        if name == "bands" and args.bands_keep_families is not None:
+            keep_fams = set(args.bands_keep_families)
+            keep_cols = [c for c in f.columns if family(c) in keep_fams]
+            dropped = f.shape[1] - len(keep_cols)
+            f = f[keep_cols]
+            print(f"--bands-keep-families {sorted(keep_fams)}: dropped {dropped} other columns, "
+                  f"{f.shape[1]} columns remain")
         if len(sources) > 1:
             f = f.add_suffix(f"@{name}")
         parts.append(f)
