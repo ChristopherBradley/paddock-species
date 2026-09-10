@@ -30,6 +30,8 @@
 #   ./run_national.sh presegment   # ~320 jobs
 #   ./run_national.sh sam          # ~40 GPU jobs, each chained to its own 8 chunks
 #   ./run_national.sh predict      # inference, chained per chunk to its SAM job
+#   ./run_national.sh sampredict   # 9 km pipeline: SAM + predict in one GPU job per 8 chunks
+#                                 #   (instead of sam + predict; predict rides on the spare cores)
 #   ./run_national.sh status
 #   ./run_national.sh repair       # re-derive and re-run whatever is missing on disk
 #   ./run_national.sh repair-check # did any repair job vanish on dependency release?
@@ -79,6 +81,14 @@ NCHUNK=${NCHUNK:-320}
 #   --fp16               a further 1.5x, 99.6 % identical polygons. Opt in per year and record it.
 # SAM_EXTRA="" reproduces the exact 2022-2024 code path.
 SAM_EXTRA=${SAM_EXTRA---prompt-image-only}
+# Composite raster CRS. Empty reproduces the 2022-2024 runs (EPSG:6933: the raster is the rotated
+# lattice square's bounding box, ~350 m of accidental overlap). The 9 km pipeline uses EPSG:3577
+# so segmentation and prediction share one grid, with the overlap put into aois half_m instead
+# (grid9_from_2024.py --half-m 4850). TILE_GEOMETRY_DECISION.md / VALIDATION_9KM.md.
+PRESEG_EXTRA=${PRESEG_EXTRA-}
+# Predict model + gates, shared by `predict` and `sampredict`.
+MODEL=${MODEL:-$D/models/group3_map_sharma6.joblib}
+PREDICT_ARGS="--max-area-ha 300 --crop-gate-amp 0.35 --crop-gate-shape $D/models/phenology_gate.joblib --shape-gate-skip-classes Canola Cereal Legume --yield-model $D/models/cereal_yield.joblib"
 PER_SAM=${PER_SAM:-8}          # presegment chunks per SAM job -> 40 GPU jobs
 LANES=${LANES:-64}             # max presegment/predict jobs running at once (datacube pooler)
 
@@ -205,8 +215,10 @@ PYEOF
         lane=$((i % LANES))
         DEP=""
         [ -n "${PREV[$lane]:-}" ] && DEP="-W depend=afterany:${PREV[$lane]}"
-        JID=$(qsub $DEP -l mem=4GB -l walltime=03:00:00 \
-                   -v AOIS="$f",OUTDIR=$POLY -N ps_$b presegment.pbs)
+        # PS_MEM / PS_WALLTIME: 3 km chunks fit 4 GB / 3 h; 9 km chunks (NCHUNK=60, ~266 tiles at
+        # ~77 s each, PILOT_9KM_COST.md) need PS_WALLTIME=10:00:00 (billed on use, not request).
+        JID=$(qsub $DEP -l mem=${PS_MEM:-4GB} -l walltime=${PS_WALLTIME:-03:00:00} \
+                   -v "AOIS=$f,OUTDIR=$POLY,PRESEG_EXTRA=$PRESEG_EXTRA" -N ps_$b presegment.pbs)
         PREV[$lane]=${JID%%.*}
         echo "$b ${JID%%.*}" >> $M/chunkjobs.txt
         i=$((i + 1)); room=$((room - 1))
@@ -243,6 +255,108 @@ PYEOF
         i=$((i + PER_SAM)); k=$((k + 1))
     done
     echo "submitted $k SAM jobs of $PER_SAM chunks each"
+    ;;
+sampredict)
+    # SAM + predict in ONE GPU job per group of chunks (segment_predict.py): SAM on the GPU,
+    # predict_tile.py on the 11 spare cores as each tile's polygons land. Replaces `sam` and
+    # `predict` for the 9 km pipeline, where a tile's SAM wall time exceeds its predict time
+    # spread over 11 workers, so predict costs no extra SU (FUSED_PREDICT_BENCHMARK.md). At 3 km
+    # it would be predict-bound: use `sam` + `predict` there. Predictions land in $M/pred/sp<k>/
+    # as p_<batch>.gpkg (+ .zarr); `merge` symlinks them where merge_national.pbs's p*.gpkg glob
+    # looks.
+    #
+    # RE-RUNNABLE, LIKE `presegment` AND `predict`: a group is skipped when every tile of it is
+    # in its done_stubs.txt (predicted), or when an sp_s<k> job is live. Otherwise it is
+    # (re)submitted -- segment_predict.py skips predicted tiles and SAM skips segmented ones, so a
+    # walltime-killed group resumes at no extra cost. Same MAXQ ceiling as the other stages.
+    #
+    # SP_NODEP=1: submit a group only when EVERY composite it needs already exists, with NO PBS
+    # dependency. This is how a polling launcher drives the stage: dependent jobs on gadi can be
+    # destroyed the instant their dependency is met (the long note in `presegment`), and a
+    # launcher that re-runs this every few minutes needs no dependency at all. Without SP_NODEP
+    # the group is chained (afterany) to its chunks' presegment jobs from chunkjobs.txt, as before.
+    mkdir -p $M/sam $M/pred
+    MAXQ=${MAXQ:-180}
+    inq=$(qstat -u cb8590 2>/dev/null | awk 'NR>5' | wc -l)
+    room=$(( MAXQ - inq ))
+    LIVE_NAMES=$(mktemp); qstat -u cb8590 -w 2>/dev/null | awk 'NR>5 {print $4}' > "$LIVE_NAMES"
+    trap 'rm -f "$LIVE_NAMES"' EXIT
+    n=$(ls $CH/p*.csv | wc -l)
+    i=0; k=0; nsub=0; ndone=0; nlive=0; nwait=0
+    while [ $i -lt $n ]; do
+        part=$(seq -f "p%03g" $i $((i + PER_SAM - 1)) | head -$PER_SAM)
+        $PY - "$CH" "$M/sam/s$k.csv" $part <<'PYEOF'
+import sys, os, pandas as pd
+ch, out = sys.argv[1], sys.argv[2]
+fs = [os.path.join(ch, f"{b}.csv") for b in sys.argv[3:]]
+fs = [f for f in fs if os.path.exists(f)]
+pd.concat([pd.read_csv(f) for f in fs], ignore_index=True).to_csv(out, index=False)
+PYEOF
+        mkdir -p $M/pred/sp$k
+        # state of this group: tiles left to predict, composites still missing
+        read -r left missing <<< "$($PY - "$M/sam/s$k.csv" "$M/pred/sp$k/done_stubs.txt" "$POLY" <<'PYEOF'
+import sys, os, pandas as pd
+aois, done_p, poly = sys.argv[1:4]
+stubs = pd.read_csv(aois).stub.tolist()
+done = set(open(done_p).read().split()) if os.path.exists(done_p) else set()
+print(sum(s not in done for s in stubs), sum(not os.path.exists(f"{poly}/{s}.tif") for s in stubs))
+PYEOF
+)"
+        if [ "$left" -eq 0 ]; then ndone=$((ndone + 1)); i=$((i + PER_SAM)); k=$((k + 1)); continue; fi
+        if grep -qx "sp_s$k" "$LIVE_NAMES"; then nlive=$((nlive + 1)); i=$((i + PER_SAM)); k=$((k + 1)); continue; fi
+        if [ -n "${SP_NODEP:-}" ]; then
+            if [ "$missing" -gt 0 ]; then nwait=$((nwait + 1)); i=$((i + PER_SAM)); k=$((k + 1)); continue; fi
+            DEP=""
+        else
+            IDS=$(for b in $part; do awk -v b="$b" '$1==b {print $2}' $M/chunkjobs.txt 2>/dev/null; done \
+                  | tr '\n' ':' | sed 's/:$//')
+            [ -n "$IDS" ] && DEP="-W depend=afterany:$IDS" || DEP=""
+        fi
+        if [ $room -le 0 ]; then
+            echo "STOPPING at sp_s$k -- queue at MAXQ=$MAXQ; re-run '$0 sampredict' when it drains (skips done and live groups)"
+            break
+        fi
+        JID=$(qsub $DEP -l walltime=${SP_WALLTIME:-06:00:00} \
+              -v "AOIS=$M/sam/s$k.csv,OUTDIR=$POLY,PREDDIR=$M/pred/sp$k,MODEL=$MODEL,WORKERS=${WORKERS:-11},SAM_EXTRA=$SAM_EXTRA,EXTRA_ARGS=$PREDICT_ARGS" \
+              -N sp_s$k sampredict.pbs)
+        for b in $part; do echo "$b ${JID%%.*}" >> $M/sam/jobmap.txt; done
+        echo "sp_s$k ${JID%%.*} $(date +%FT%T) left=$left" >> $M/sam/spjobs.txt
+        nsub=$((nsub + 1)); room=$((room - 1))
+        i=$((i + PER_SAM)); k=$((k + 1))
+    done
+    echo "sampredict: $nsub submitted, $ndone groups done, $nlive live, $nwait waiting for composites (of $k groups, PER_SAM=$PER_SAM)"
+    ;;
+predict)
+    # SAM + predict in ONE GPU job per group of chunks (segment_predict.py): SAM on the GPU,
+    # predict_tile.py on the 11 spare cores as each tile's polygons land. Replaces `sam` and
+    # `predict` for the 9 km pipeline, where a tile's SAM wall time exceeds its predict time
+    # spread over 11 workers, so predict costs no extra SU (FUSED_PREDICT_BENCHMARK.md). At 3 km
+    # it would be predict-bound: use `sam` + `predict` there. Predictions land in $M/pred/sp<k>/
+    # as p_<batch>.gpkg (+ .zarr); `merge` symlinks them where merge_national.pbs's p*.gpkg glob
+    # looks. Resumable: re-running skips predicted tiles (done_stubs.txt) and segmented tiles.
+    mkdir -p $M/sam $M/pred
+    n=$(ls $CH/p*.csv | wc -l)
+    i=0; k=0
+    while [ $i -lt $n ]; do
+        part=$(seq -f "p%03g" $i $((i + PER_SAM - 1)) | head -$PER_SAM)
+        $PY - "$CH" "$M/sam/s$k.csv" $part <<'PYEOF'
+import sys, os, pandas as pd
+ch, out = sys.argv[1], sys.argv[2]
+fs = [os.path.join(ch, f"{b}.csv") for b in sys.argv[3:]]
+fs = [f for f in fs if os.path.exists(f)]
+pd.concat([pd.read_csv(f) for f in fs], ignore_index=True).to_csv(out, index=False)
+PYEOF
+        IDS=$(for b in $part; do awk -v b="$b" '$1==b {print $2}' $M/chunkjobs.txt; done \
+              | tr '\n' ':' | sed 's/:$//')
+        [ -n "$IDS" ] && DEP="-W depend=afterany:$IDS" || DEP=""
+        mkdir -p $M/pred/sp$k
+        JID=$(qsub $DEP -l walltime=${SP_WALLTIME:-06:00:00} \
+              -v "AOIS=$M/sam/s$k.csv,OUTDIR=$POLY,PREDDIR=$M/pred/sp$k,MODEL=$MODEL,WORKERS=${WORKERS:-11},SAM_EXTRA=$SAM_EXTRA,EXTRA_ARGS=$PREDICT_ARGS" \
+              -N sp_s$k sampredict.pbs)
+        for b in $part; do echo "$b ${JID%%.*}" >> $M/sam/jobmap.txt; done
+        i=$((i + PER_SAM)); k=$((k + 1))
+    done
+    echo "submitted $k SAM+predict jobs of $PER_SAM chunks each"
     ;;
 predict)
     mkdir -p $M/pred
@@ -359,7 +473,7 @@ status)
     # "queue: 0 jobs" while four rs_s* GPU jobs were an hour into their walltime — which read
     # exactly like the vanishing-job failure and sent one investigation down a blind alley.
     # A status line that omits a whole class of job is the same liability as one that overflows.
-    JOBS='ps_p|sam_s|pr_p|rp_r|rs_s|rsm_z'
+    JOBS='ps_p|sam_s|sp_s|pr_p|rp_r|rs_s|rsm_z'
     q=$(qstat -u cb8590 2>/dev/null | grep -cE "$JOBS" || true)
     r=$(qstat -u cb8590 2>/dev/null | grep -E "$JOBS" | awk '$10=="R"' | wc -l || true)
     echo "queue:       $q jobs ($r running)"
@@ -442,7 +556,7 @@ PYEOF
         # tiles with double the headroom, and a job that still runs out resumes on re-submit
         # because every composite is written as it is built.
         JID=$(qsub $DEP -l mem=4GB -l walltime=06:00:00 \
-                   -v AOIS="$f",OUTDIR=$POLY -N rp_$b presegment.pbs)
+                   -v "AOIS=$f,OUTDIR=$POLY,PRESEG_EXTRA=$PRESEG_EXTRA" -N rp_$b presegment.pbs)
         RPREV[$lane]=${JID%%.*}
         echo "$b ${JID%%.*}" >> $M/repair/jobs.txt
         i=$((i + 1)); room=$((room - 1))
@@ -677,6 +791,8 @@ PYEOF
         echo "or set FORCE_MERGE=1 to merge a map with known holes." >&2
         exit 1
     fi
+    # sampredict writes $M/pred/sp<k>/p_<batch>.gpkg; expose them to merge_national.pbs's p*.gpkg glob
+    for f in $M/pred/sp*/p_*.gpkg; do [ -f "$f" ] && ln -sf "$f" "$M/pred/$(basename $(dirname $f))_$(basename $f)"; done 2>/dev/null
     qsub -v M=$M,YEAR=$YEAR merge_national.pbs
     ;;
 boundary)

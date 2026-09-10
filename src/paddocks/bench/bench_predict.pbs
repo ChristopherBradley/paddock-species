@@ -25,7 +25,7 @@ cd /home/147/cb8590/Projects/paddock-species/src/paddocks
 mkdir -p "$(dirname "$OUT")"
 echo "BENCH predict job=$PBS_JOBID queue=$PBS_QUEUE aois=$AOIS out=$OUT host=$(hostname) start=$(date +%s)"
 $PY predict_tile.py --aois "$AOIS" --polydir "$POLYDIR" --model "$MODEL" --out "$OUT" \
-    --timings "${OUT%.gpkg}_timings.csv" --no-zarr ${EXTRA_ARGS:-} &
+    --timings "${OUT%.gpkg}_timings.csv" ${EXTRA_ARGS:-} &
 PID=$!
 bash bench/memsample.sh $PID 20 "${OUT%.gpkg}_memsample.log" &
 wait $PID
