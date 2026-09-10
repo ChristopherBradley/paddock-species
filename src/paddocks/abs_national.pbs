@@ -48,5 +48,6 @@ $PY abs_compare.py \
     --sa2 $D/abs/SA2_2021_AUST_GDA2020.shp \
     --abares $D/abs/abares_state_area.csv \
     --aois $M/aois.csv \
+    ${ABS_EXTRA:-} \
     --out "${OUT:-$REPO/output/ABS_COMPARISON_NATIONAL_$YEAR.md}"
 echo "Done abs_compare national $YEAR"

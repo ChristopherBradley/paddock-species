@@ -34,7 +34,7 @@
 #   ./run_national.sh merge        # one national GeoPackage (refuses if chunks are incomplete)
 #   ./run_national.sh boundary     # de-duplicate the ~350 m tile-overlap band in the merged file
 #                                 #   -> national_${YEAR}_crops_merged.gpkg (TILE_BOUNDARY_MERGE.md)
-#   ./run_national.sh classified   # classified-only 'good polygons' file from the boundary output
+#   ./run_national.sh classified   # _classified (every predicted class) and _good (strict mask) files
 #   ./run_national.sh summary      # per-category polygon count/area for this year, from pred/*.gpkg
 #   ./run_national.sh cost         # SUs billed so far, by stage
 #
@@ -382,27 +382,35 @@ boundary)
     qsub -v M=$M,YEAR=$YEAR boundary_national.pbs
     ;;
 classified)
-    # The "good polygons" product: classified polygons only (abstain_reason empty) from the
-    # boundary-merged file, `pred` renamed `predicted_crop_type` and the QGIS style of the 2024
-    # release copied in, so the file opens coloured. Same rule as the retired 3 km
-    # national_2024_crops_classified.gpkg (650,766 of 1,346,582). raster_cut_m and class_conflict
-    # stay as columns for a stricter, optional mask (output/TILE_BOUNDARY_MERGE.md).
+    # Two products from the boundary-merged file, both with `pred` renamed `predicted_crop_type` and
+    # the QGIS style of the 2024 release copied in so they open coloured.
+    #   _classified.gpkg  every polygon with a predicted class, the equivalent of the retired 3 km
+    #                     release (650,766 of 1,346,582). It includes polygons that failed the
+    #                     phenology-shape check: the run predicts every class regardless
+    #                     (--shape-gate-skip-classes Canola Cereal Legume) and records the failure as
+    #                     abstain_reason = no_crop_shape, so it can be masked later (PROJ_NOTES
+    #                     2026-09-07 (2a)).
+    #   _good.gpkg        the strict mask: a predicted class AND every gate passed (abstain_reason empty).
+    # raster_cut_m and class_conflict stay as columns for a further, optional mask.
     IN=$M/national_${YEAR}_crops_merged.gpkg
-    OUTC=$M/national_${YEAR}_crops_merged_classified.gpkg
     STYLE=${STYLE:-$D/national2024/national_2024_crops_classified.gpkg}
     OGR=/apps/gdal/3.7.3/bin
     [ -s "$IN" ] || { echo "no boundary-merged file at $IN - run '$0 boundary' first" >&2; exit 1; }
-    rm -f "$OUTC"
-    $OGR/ogr2ogr -f GPKG "$OUTC" "$IN" crops -nln crops -where "abstain_reason = '' OR abstain_reason IS NULL"
-    $PY - "$OUTC" <<'PYEOF'
+    for kind in classified good; do
+        OUTC=$M/national_${YEAR}_crops_merged_${kind}.gpkg
+        if [ "$kind" = classified ]; then W="pred IS NOT NULL AND pred <> ''"; else W="abstain_reason = '' OR abstain_reason IS NULL"; fi
+        rm -f "$OUTC"
+        $OGR/ogr2ogr -f GPKG "$OUTC" "$IN" crops -nln crops -where "$W"
+        $PY - "$OUTC" <<'PYEOF'
 import sqlite3, sys
 c = sqlite3.connect(sys.argv[1])
 c.execute("ALTER TABLE crops RENAME COLUMN pred TO predicted_crop_type")
 c.commit()
-print(f"{c.execute('SELECT COUNT(*) FROM crops').fetchone()[0]:,} classified polygons")
+print(f"{sys.argv[1].rsplit('/', 1)[1]}: {c.execute('SELECT COUNT(*) FROM crops').fetchone()[0]:,} polygons")
 PYEOF
-    if [ -s "$STYLE" ]; then $OGR/ogr2ogr -update -append "$OUTC" "$STYLE" layer_styles; else echo "no style source at $STYLE; file left unstyled"; fi
-    ls -la "$OUTC"
+        if [ -s "$STYLE" ]; then $OGR/ogr2ogr -update -append "$OUTC" "$STYLE" layer_styles; else echo "no style source at $STYLE; left unstyled"; fi
+    done
+    ls -la $M/national_${YEAR}_crops_merged_classified.gpkg $M/national_${YEAR}_crops_merged_good.gpkg
     ;;
 summary)
     # Per-category polygon count and area, for comparing one year against another (and against

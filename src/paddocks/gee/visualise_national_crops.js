@@ -1,10 +1,12 @@
 // National 2024 crop-type map — paddock-species
 //
-// 1,346,582 polygons over the NLUM winter-crop mask (~895,000 km²), classified Canola /
-// Cereal / Legume or left unclassified with an abstain_reason. Uploaded as 20 table-asset
-// shards by upload_polygons_to_gee.py (see NATIONAL_2024_RUN.md for how the map was built
-// and scored against ABS — the map is area-permissive: it calls ~1.47x as much land crop as
-// ABS says was sown, so read `abstain_reason` and `ndvi_amp` before trusting raw area).
+// 1,158,824 polygons over 15,968 9 km tiles of the NLUM crop mask, classified Canola / Cereal /
+// Legume or left unclassified with an abstain_reason. Uploaded as 20 table-asset shards by
+// upload_polygons_to_gee.py from the de-duplicated national_2024_crops_merged.gpkg. Scored against
+// ABS in output/ABS_COMPARISON_NATIONAL_2024_9km.md: the map calls ~1.18x as much land crop as ABS
+// says was sown, so read `abstain` and `ndvi_amp` before trusting raw area. 105,627 classified
+// polygons also carry abstain = 'no_crop_shape', a failed phenology-shape check recorded as a flag;
+// they are shown as classified here (filter on `abstain` to drop them).
 //
 // Paste this whole file into code.earthengine.google.com and click Run.
 

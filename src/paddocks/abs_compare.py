@@ -83,6 +83,11 @@ def main():
                                    "report can measure how much of each SA2 the mapped box "
                                    "actually covers, which turns the comparison from a share "
                                    "against a share into an area against an area.")
+    ap.add_argument("--count-as-classified", nargs="*", default=[],
+                    help="abstain reasons that still carry a class and count as classified. The 9 km run "
+                         "predicts every class and only FLAGS a phenology-shape failure as no_crop_shape "
+                         "(PROJ_NOTES 2026-09-07 (2a)); pass no_crop_shape to score the map as published "
+                         "rather than with the rejected shape gate applied.")
     ap.add_argument("--out", required=True)
     ap.add_argument("--min-mapped-ha", type=float, default=100.0,
                     help="drop SA2-years with less mapped crop than this; a share computed over "
@@ -95,6 +100,10 @@ def main():
     P = pd.concat([gpd.read_file(f) for f in files], ignore_index=True)
     P = gpd.GeoDataFrame(P, crs=gpd.read_file(files[0]).crs)
     P["region"] = P.stub.str.rsplit("_", n=2).str[0]
+    if args.count_as_classified:
+        flag = P.abstain_reason.isin(args.count_as_classified) & P.pred.notna()
+        print(f"counting {int(flag.sum()):,} polygons flagged {args.count_as_classified} as classified")
+        P.loc[flag, "abstain_reason"] = ""
     print(f"{len(files)} files, {len(P)} paddocks, years {sorted(P.year.unique())}")
 
     S = gpd.read_file(args.sa2)[["SA2_CODE21", "SA2_NAME21", "STE_NAME21", "geometry"]]

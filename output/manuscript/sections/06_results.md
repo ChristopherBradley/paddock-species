@@ -25,23 +25,23 @@ Adding the six Sharma et al. (2026) band-derived indices to the three original i
 
 ## 5.2 National map and ABS validation: composition versus area
 
-The completed 2024 national map contains XXX segmented polygons across XXX tiles (Table 1; Fig. 4 [XXX: regenerate from the re-run]). Of these, XXX% of polygons (XXX% of total area) carry a classification. The remainder carry one of four abstain reasons (`area_below_min`, `no_crop_signal`, `unsegmented_blob`, `too_few_observations`). Across the XXX SA2s where the mapped footprint covers at least 50% of the SA2 (Section 4.6), mapped canola composition (its share of total mapped crop area) against the ABS canola share gives r = XXX and a median absolute error of XXX percentage points; the reference floor is the 6.8% median disagreement between ABS and ABARES (Section 3.3; Fig. 5a [XXX: regenerate]; Table 3).
+The completed 2024 national map contains 1,158,824 segmented polygons across 15,968 tiles (Table 1; Fig. 4 [XXX: regenerate from the re-run]). Of these, 39.9% of polygons (58.2% of total area) carry a classification. The remainder carry one of four abstain reasons (`area_below_min`, `no_crop_signal`, `unsegmented_blob`, `too_few_observations`). Of the classified polygons, 105,627 (22.9%) also carry the `no_crop_shape` flag for a failed phenology-shape check (Section 4.4). Across the 151 SA2s where the mapped footprint covers at least 50% of the SA2 (Section 4.6), mapped canola composition (its share of total mapped crop area) against the ABS canola share gives r = 0.77 and a median absolute error of 4.1 percentage points; the reference floor is the 6.8% median disagreement between ABS and ABARES (Section 3.3; Fig. 5a [XXX: regenerate]; Table 3).
 
-The map's absolute area over-calls crop-present land relative to ABS by XXXx nationally and by XXXx in the 100 km regional test. By class (Fig. 5b), the over-called share splits as cereal +XXX percentage points, legume +XXX points and canola XXX points. Once the over-call is divided out, by comparing the mapped canola share against the diluted share a perfect classifier would report given the measured over-call, canola composition is XXX% mapped versus XXX% expected. This is the central result of the paper [XXX: held on the first national map; confirm on the re-run]: the map's main disagreement with official statistics is a presence-detection problem (too much land called crop-present) rather than a classification problem, and it reproduces at national and regional scale with the same class signature (Section 6.1).
+The map's absolute area over-calls crop-present land relative to ABS by 1.18x nationally and by XXXx in the 100 km regional test [XXX: regional value awaits a regional re-run with the adopted classifier]. Before cross-tile de-duplication the same map over-called by 1.31x, because polygons in the tile overlap band were counted in both tiles. By class (Fig. 5b), the over-called share splits as cereal +8.7 percentage points, legume +8.5 points and canola -2.4 points. Once the over-call is divided out, by comparing the mapped canola share against the diluted share a perfect classifier would report given the measured over-call, canola composition is 13.8% mapped versus 16.2% expected. This is the central result of the paper [CHECK: holds in direction on the re-run, since the excess still sits in cereal and legume. Canola is now 2.4 points below its expected share, against 0.3 on the first national map, so review "near-exact" in Section 6.1]: the map's main disagreement with official statistics is a presence-detection problem (too much land called crop-present) rather than a classification problem, and it reproduces at national and regional scale with the same class signature (Section 6.1).
 
-**Table 3.** ABS validation summary, national scale, XXX SA2s. `diluted` is the crop-share ABS would imply if the area over-call were spread proportionally across classes; `absorbed` is the difference between that and the actual mapped share, the excess this class's mapped area carries.
+**Table 3.** ABS validation summary, national scale, 151 SA2s. `diluted` is the crop-share ABS would imply if the area over-call were spread proportionally across classes; `absorbed` is the difference between that and the actual mapped share, the excess this class's mapped area carries.
 
 | Class | ABS share | Diluted share | Mapped share | Absorbed (points) |
 |---|---|---|---|---|
-| canola | XXX | XXX | XXX | XXX |
-| cereal | XXX | XXX | XXX | XXX |
-| legume | XXX | XXX | XXX | XXX |
+| canola | 19.2% | 16.2% | 13.8% | -2.4 |
+| cereal | 67.3% | 57.0% | 65.6% | +8.7 |
+| legume | 8.9% | 7.6% | 16.1% | +8.5 |
 
-Canola composition: r = XXX, median absolute error XXX percentage points (n = XXX). Area over-call: XXXx national, XXXx regional (100 km). ABS/ABARES mutual disagreement (the accuracy floor, Section 3.3): median 6.8%.
+Canola composition: r = 0.77, median absolute error 4.1 percentage points (n = 151). Area over-call: 1.18x national (1.31x before cross-tile de-duplication), XXXx regional (100 km). ABS/ABARES mutual disagreement (the accuracy floor, Section 3.3): median 6.8%.
 
 ## 5.3 Legume classification error
 
-A separate classification error sits on top of the presence problem: legume is mapped at XXX% of classified area nationally against an ABS share of XXX%. The argmax and mean-predicted-probability classes agree (Section 4.6), which rules out a decision-rule artefact such as a systematic tie-break. The mechanism remains open (Section 6.7; Section 7, Limitation 2). The confusion matrices in Section 5.1 (canola and cereal paddocks predicted as legume more often than the reverse) are consistent in direction with the over-prediction but do not account for its size.
+A separate classification error sits on top of the presence problem: legume is mapped at 16.1% of classified area nationally against an ABS share of 8.9%. The argmax and mean-predicted-probability classes agree (Section 4.6), which rules out a decision-rule artefact such as a systematic tie-break. The mechanism remains open (Section 6.7; Section 7, Limitation 2). The confusion matrices in Section 5.1 (canola and cereal paddocks predicted as legume more often than the reverse) are consistent in direction with the over-prediction but do not account for its size.
 
 ## 5.4 Presence-gate experiment: a rejected fix
 
@@ -59,9 +59,9 @@ The phenology-shape presence gate (Section 4.4) was tested against all nine seas
 
 The ABS validation (Section 5.2) and the legume check (Section 5.3) both rely on official statistics, so we also compared the national map at the pixel level against two products with no connection to this project's pipeline, WorldCereal 2021 v100 and the NLUM v7 250 m per-commodity probability surfaces, on a stratified sample of 250,000 national paddock centroids (Section 4.6). Both products predate this map by three years (2021 versus 2024).
 
-Against WorldCereal's `temporarycrops` layer, our classified-versus-abstained presence call agrees at XXX% overall, and the agreement is symmetric: XXX% of our abstained points are also called no-crop by WorldCereal, and XXX% of our classified points are also called crop. Against WorldCereal's `wintercereals` layer, agreement on the cereal class is weaker: XXX% of the points our map calls cereal are `wintercereals`-positive in WorldCereal (n = XXX). WorldCereal is an independent product rather than ground truth, so this does not establish which product is correct.
+Against WorldCereal's `temporarycrops` layer, our classified-versus-abstained presence call agrees at 75.3% overall. The agreement is not symmetric: 80.9% of our abstained points are also called no-crop by WorldCereal, but only 66.8% of our classified points are also called crop [CHECK: symmetric on the first national map (73.0% and 73.2%), and Section 6.1 relies on that]. Against WorldCereal's `wintercereals` layer, agreement on the cereal class is weaker: 43.2% of the points our map calls cereal are `wintercereals`-positive in WorldCereal (n = 66,852). WorldCereal is an independent product rather than ground truth, so this does not establish which product is correct.
 
-NLUM's per-commodity surfaces cover all three target groups. Median NLUM oilseed probability at our canola-classified points is XXX times the median at our abstained points, the largest ratio in its column, and median legume probability at our legume-classified points is XXX times the abstained-point median, again the largest in its column. NLUM's grazing-probability layer supports the presence-gate reading from an unrelated source: median grazing probability is XXX% at our abstained points against XXX% at our classified points. Abstained land is therefore concentrated on land NLUM rates as probable grazing country, rather than being a uniform sample of everything the classifier could not decide (Section 6.4).
+NLUM's per-commodity surfaces cover all three target groups. Median NLUM oilseed probability at our canola-classified points is 8.38 times the median at our abstained points, the largest ratio in its column. Median legume probability at our legume-classified points is 0.92 times the abstained-point median. This is still the largest ratio in its column, but it is below 1. NLUM therefore does not rate our legume polygons as more legume-probable than abstained land [CHECK: 1.62 on the first national map]. NLUM's grazing-probability layer supports the presence-gate reading from an unrelated source: median grazing probability is 57.4% at our abstained points against 17.7% at our classified points. Abstained land is therefore concentrated on land NLUM rates as probable grazing country, rather than being a uniform sample of everything the classifier could not decide (Section 6.4).
 
 ## 5.6 Multi-year regional evidence
 
@@ -69,7 +69,7 @@ Across the nine-year (2017-2025), 100 km regional re-run, classified share range
 
 ## 5.7 Cereal yield
 
-The cereal yield model reached a spatial-transfer root-mean-square error of 1.21 t/ha (30.4% of the 3.97 t/ha median observed yield). The ABS calibration factor (XXX, fitted on one year of ABS data) checked to within XXX% to XXX% of ABS-implied yield on two held-out years (Fig. 8 [XXX: regenerate]; Table 5). Both raw (NVT-trial-equivalent) and ABS-calibrated yield columns are provided on every classified cereal polygon (Section 4.5).
+The cereal yield model reached a spatial-transfer root-mean-square error of 1.21 t/ha (30.4% of the 3.97 t/ha median observed yield). The ABS calibration factor (0.6248, fitted on one year of ABS data) checked to within +3.1% to +18.1% of ABS-implied yield on two held-out years (Fig. 8 [XXX: regenerate]; Table 5). Both raw (NVT-trial-equivalent) and ABS-calibrated yield columns are provided on every classified cereal polygon (Section 4.5).
 
 **Table 5.** cereal yield model performance (pooled wheat/barley/oat, three-index satellite features), before ABS calibration.
 
@@ -82,6 +82,6 @@ The cereal yield model reached a spatial-transfer root-mean-square error of 1.21
 | | Satellite features | 1,119 | 0.526 | 1.207 |
 | | Satellite + year/state | 1,119 | 0.577 | 1.140 |
 
-ABS calibration factor: XXX (fitted on one year), checked XXX% to XXX% against ABS-implied yield on two held-out years. Canola yield is not provided: an optical-only model's coefficient of determination (0.27) did not exceed a year-and-state-mean baseline (0.29) (Section 7, Limitation 5).
+ABS calibration factor: 0.6248 (fitted on one year), checked +3.1% to +18.1% against ABS-implied yield on two held-out years. Canola yield is not provided: an optical-only model's coefficient of determination (0.27) did not exceed a year-and-state-mean baseline (0.29) (Section 7, Limitation 5).
 
 [PENDING: E8] National multi-year (2017-2025) polygon and area totals by year (Table 6); national year-on-year canola, cereal and legume share trends; any claim that the 2024 national results generalise across seasons.

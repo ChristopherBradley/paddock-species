@@ -16,7 +16,7 @@
 #   1. paddock centroids of the de-duplicated map -> WorldCereal and NLUM point comparisons
 #   2. trial-site retention (does a 2024 trial sit inside a retained polygon; geometry only --
 #      the production classifier saw every trial, so F1 from this map would be in-sample)
-#   3. the retired 3 km map against this one, de-duplicated and before de-duplication
+#   3. the retired 3 km map against this one: de-duplicated, strict mask, and before de-duplication
 # One step failing does not stop the others; each step's exit code is printed.
 #
 #   qsub -v M=$D/national2024_9km,YEAR=2024 compare_national.pbs
@@ -28,6 +28,7 @@ export NUMPY_MADVISE_HUGEPAGE=0 PROJ_NETWORK=OFF
 : "${M:?set -v M=}"
 : "${YEAR:?set -v YEAR=}"
 PY=/g/data/xe2/John/geospatenv/bin/python
+PYT=/g/data/xe2/cb8590/miniconda/envs/shelterbelts/bin/python   # has tabulate, which DataFrame.to_markdown needs; geospatenv does not
 REPO=/home/147/cb8590/Projects/paddock-species
 D=/scratch/xe2/cb8590/paddock-species-data/derived
 cd $REPO/src/paddocks
@@ -46,20 +47,26 @@ g.assign(cx=c.x, cy=c.y)[["pred", "abstain_reason", "cx", "cy"]].to_csv(sys.argv
 print(f"{len(g):,} centroids (EPSG:{g.crs.to_epsg()}) -> {sys.argv[2]}")
 PYEOF
 step centroids $?
-$PY worldcereal_compare.py --centroids $C/national_${YEAR}_centroids.csv --out $REPO/output/WORLDCEREAL_COMPARISON_$TAG.md
+$PYT worldcereal_compare.py --centroids $C/national_${YEAR}_centroids.csv --out $REPO/output/WORLDCEREAL_COMPARISON_$TAG.md
 step worldcereal $?
-$PY nlum_compare.py --centroids $C/national_${YEAR}_centroids.csv --out $REPO/output/NLUM_COMPARISON_$TAG.md
+$PYT nlum_compare.py --centroids $C/national_${YEAR}_centroids.csv --out $REPO/output/NLUM_COMPARISON_$TAG.md
 step nlum $?
 $PY eval_map_at_sites.py --sites $D/benchksu/validation/sites_SENSITIVE.csv --pred $MERGED --layer crops \
     --aois $M/aois.csv --year $YEAR --name national_$TAG \
     --out-json $C/sites_$TAG.json --out-sites $C/sites_${TAG}_SENSITIVE.csv
 step sites $?
+# "classified" = a predicted class, including polygons only FLAGGED by the phenology-shape check
+# (no_crop_shape): the map as published, and like-for-like with the 3 km map, which had no shape gate.
 $PY compare_maps.py --a $OLD --a-name "3 km (retired)" --b $MERGED --b-name "9 km (adopted, de-duplicated)" \
-    --aois $M/aois.csv --n-windows 300 \
+    --count-as-classified no_crop_shape --aois $M/aois.csv --n-windows 300 \
     --out-md $REPO/output/MAP_COMPARISON_3KM_VS_9KM_$YEAR.md --out-json $C/map_compare_merged.json
 step compare_merged $?
-$PY compare_maps.py --a $OLD --a-name "3 km (retired)" --b $PRE --b-name "9 km (adopted, before de-duplication)" \
+$PY compare_maps.py --a $OLD --a-name "3 km (retired)" --b $MERGED --b-name "9 km (adopted, strict mask)" \
     --aois $M/aois.csv --n-windows 300 \
+    --out-md $C/MAP_COMPARISON_3KM_VS_9KM_${YEAR}_strict.md --out-json $C/map_compare_strict.json
+step compare_strict $?
+$PY compare_maps.py --a $OLD --a-name "3 km (retired)" --b $PRE --b-name "9 km (adopted, before de-duplication)" \
+    --count-as-classified no_crop_shape --aois $M/aois.csv --n-windows 300 \
     --out-md $C/MAP_COMPARISON_3KM_VS_9KM_${YEAR}_preboundary.md --out-json $C/map_compare_pre.json
 step compare_pre $?
 echo "Done compare_national"
