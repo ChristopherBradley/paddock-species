@@ -1,0 +1,51 @@
+#!/bin/bash
+#PBS -N canola_yield_sharma6
+#PBS -P xe2
+#PBS -q normal
+#PBS -l ncpus=12
+#PBS -l mem=32GB
+#PBS -l walltime=00:30:00
+#PBS -l storage=gdata/xe2+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+
+# Does the latest feature set (shipped 3 indices + Sharma6, the classifier's current best) beat
+# the year+state baseline for CANOLA yield? YIELD_FEASIBILITY.md's answer (optical-only R2 0.271
+# spatial vs baseline 0.290 -- satellite loses) used the retired 3-index-only feature set and
+# predates the Sharma6 indices entirely; never re-tested since. train_yield.py had no --bands /
+# --bands-keep-families support until today (added alongside this job, mirroring
+# train_species.py's identical flag) -- Presto/S1 aside, this is the first time ANY yield model
+# in this project has used anything but the 3-index optical block.
+#
+# Two arms, identical --keep and --group --crops Canola throughout, so the only difference is
+# whether Sharma6 is in the feature matrix.
+set -euo pipefail
+export PROJ_NETWORK=OFF
+# numpy hints MADV_HUGEPAGE on every large array and gadi runs THP defrag=madvise, so the kernel
+# compacts memory synchronously on those faults: the same 9 km tile ran predict's zonal step in
+# 22-25 s with this off vs 41-396 s with it on, all in system time (PROJ_NOTES 2026-09-09).
+export NUMPY_MADVISE_HUGEPAGE=0
+export OMP_NUM_THREADS=1
+export PYTHONPATH=/g/data/xe2/cb8590/models/pylibs
+PY=/g/data/xe2/John/geospatenv/bin/python
+D=/scratch/xe2/cb8590/paddock-species-data/derived
+RAW=/g/data/xe2/cb8590/paddock-species-data/raw
+REPO=/home/147/cb8590/Projects/paddock-species
+XLSX="$RAW/2017-2024 NVT Yield and Grain Quality - cbradley - 01.05.2025.xlsx"
+cd $REPO/src/paddocks
+
+OPT="$D/samgeo/ts_v2/*_SENSITIVE.csv"
+BANDS="$D/samgeo/bands_ts/*_SENSITIVE.csv"
+KEEP=$D/keep_arms/keep_reviewed_SENSITIVE.csv
+
+$PY train_yield.py --indices "$OPT" \
+    --labeled $D/nvt_trials_labeled.csv --yields "$XLSX" --keep $KEEP --group --crops Canola \
+    --out $REPO/output/CANOLA_YIELD_indices_only.md
+
+$PY train_yield.py --indices "$OPT" --bands "$BANDS" \
+    --bands-keep-families ndre2 vi2 vi3 vdvi vci evi2_sharma \
+    --labeled $D/nvt_trials_labeled.csv --yields "$XLSX" --keep $KEEP --group --crops Canola \
+    --out $REPO/output/CANOLA_YIELD_shipped_sharma6.md
+
+echo "Done canola_yield_sharma6"

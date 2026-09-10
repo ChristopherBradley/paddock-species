@@ -1,0 +1,88 @@
+#!/bin/bash
+#PBS -N s1_vs_latest
+#PBS -P xe2
+#PBS -q normal
+#PBS -l ncpus=12
+#PBS -l mem=64GB
+#PBS -l walltime=01:00:00
+#PBS -l storage=gdata/xe2+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+
+# Re-test Sentinel-1's classifier AND yield gain against the LATEST models, not the retired
+# baselines they were last measured against (EXPERIMENT_PLAN.md Block 2, user-approved
+# 2026-08-31 following fj7 access landing).
+#
+# CLASSIFIER: every existing S1 number (S1_MODEL.md, SENTINEL1_VALUE.md) was measured against
+# the retired 3-index optical model (0.823/0.825). The shipped candidate is now
+# shipped+sharma6 (0.890/0.892, GROUP3_MODEL_shipped_plus_sharma6.md) -- adopted partly because
+# it already fixes the Legume/Cereal confusion S1 was shown to fix. Untested whether S1 still
+# adds anything once stacked on top. Uses the existing MPC-derived S1 data from the 100km pilot
+# (derived/s1_paddock_ts_SENSITIVE.csv) -- no fj7 dependency, no new SU-heavy extraction.
+#
+# YIELD: the shipped yield model (cereal_yield.joblib, fit_yield_model.py) pools Wheat+Barley+Oat
+# into one Cereal-target regressor on indices-only features (51 cols) -- it has never been
+# tested with S1. The OLD YIELD_optical_s1.md tested Canola/Wheat/Barley SEPARATELY, not pooled,
+# so it does not match what actually ships. This re-runs the same --group --crops Cereal pooling
+# fit_yield_model.py uses, with and without --s1, via train_yield.py (the VALIDATION script --
+# fit_yield_model.py itself has no train/test split and is not the tool for measuring a gain).
+#
+# ROW DISCIPLINE. Both the classifier and yield arms use keep_s1both throughout, including the
+# S1-FREE baseline arms -- S1_MODEL.md section 2 documents exactly the mistake that happens
+# otherwise (scoring a fixed row list that one arm cannot fully see, which manufactured a wrong
+# conclusion once already in this project, in both directions). keep_s1both is rebuilt fresh
+# below per s1_controlled.pbs's own convention, in case anything shifted since 2026-08-09.
+set -euo pipefail
+export PROJ_NETWORK=OFF
+# numpy hints MADV_HUGEPAGE on every large array and gadi runs THP defrag=madvise, so the kernel
+# compacts memory synchronously on those faults: the same 9 km tile ran predict's zonal step in
+# 22-25 s with this off vs 41-396 s with it on, all in system time (PROJ_NOTES 2026-09-09).
+export NUMPY_MADVISE_HUGEPAGE=0
+export OMP_NUM_THREADS=1
+export PYTHONPATH=/g/data/xe2/cb8590/models/pylibs
+PY=/g/data/xe2/John/geospatenv/bin/python
+D=/scratch/xe2/cb8590/paddock-species-data/derived
+RAW=/g/data/xe2/cb8590/paddock-species-data/raw
+REPO=/home/147/cb8590/Projects/paddock-species
+XLSX="$RAW/2017-2024 NVT Yield and Grain Quality - cbradley - 01.05.2025.xlsx"
+cd $REPO/src/paddocks
+mkdir -p $REPO/output/arms
+
+S1TS=$D/s1_paddock_ts_SENSITIVE.csv
+OPT="$D/samgeo/ts_v2/*_SENSITIVE.csv"
+BANDS="$D/samgeo/bands_ts/*_SENSITIVE.csv"
+KEEP=$D/keep_arms/keep_s1both_SENSITIVE.csv
+TESTKEEP=$D/keep_arms/testkeep_temporal_SENSITIVE.csv
+
+$PY make_keep_s1both.py --indices "$OPT" --s1 $S1TS \
+    --keep $D/keep_arms/keep_reviewed_SENSITIVE.csv --test-keep $TESTKEEP --out $KEEP
+echo "keep_s1both rebuilt: $(wc -l < $KEEP) rows"
+
+# --- Classifier: shipped+sharma6, with and without S1 ---------------------------------------
+CCOMMON="--labeled $D/nvt_trials_labeled.csv --keep $KEEP --test-keep $TESTKEEP \
+         --target group3 --importance-repeats 5"
+FAMS="--bands-keep-families ndre2 vi2 vi3 vdvi vci evi2_sharma"
+
+$PY train_species.py --indices "$OPT" --bands "$BANDS" $FAMS $CCOMMON \
+    --confusion-png $REPO/output/figures/confusion_shipped_sharma6_ctl_temporal.png \
+    --spatial-confusion-png $REPO/output/figures/confusion_shipped_sharma6_ctl_spatial.png \
+    --out $REPO/output/arms/GROUP3_ctl_shipped_sharma6_only.md
+
+$PY train_species.py --indices "$OPT" --bands "$BANDS" $FAMS --s1 $S1TS $CCOMMON \
+    --confusion-png $REPO/output/figures/confusion_shipped_sharma6_s1_temporal.png \
+    --spatial-confusion-png $REPO/output/figures/confusion_shipped_sharma6_s1_spatial.png \
+    --out $REPO/output/arms/GROUP3_ctl_shipped_sharma6_s1.md
+
+# --- Yield: Cereal-pooled (Wheat+Barley+Oat, matching cereal_yield.joblib), with/without S1 --
+# (XLSX has spaces in its filename -- quoted individually at each use, not folded into a shared
+# unquoted var, per train_yield.pbs's own documented lesson about that exact bug.)
+$PY train_yield.py --indices "$OPT" \
+    --labeled $D/nvt_trials_labeled.csv --yields "$XLSX" --keep $KEEP --group --crops Cereal \
+    --out $REPO/output/YIELD_cereal_pooled_ctl.md
+
+$PY train_yield.py --indices "$OPT" --s1 $S1TS \
+    --labeled $D/nvt_trials_labeled.csv --yields "$XLSX" --keep $KEEP --group --crops Cereal \
+    --out $REPO/output/YIELD_cereal_pooled_s1.md
+
+echo "Done s1_vs_latest"

@@ -1,0 +1,53 @@
+#!/bin/bash
+#PBS -N canola_yield_s1
+#PBS -P xe2
+#PBS -q normal
+#PBS -l ncpus=4
+#PBS -l mem=16GB
+#PBS -l walltime=00:20:00
+#PBS -l storage=gdata/xe2+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+
+# Does S1 fix canola yield's known problem (optical-only R2 0.271 spatial < year+state baseline
+# 0.290) against the CURRENT population, not the retired one? YIELD_FEASIBILITY.md's "do not
+# ship canola yield until Sentinel-1 is available" verdict rests on a canola+S1 number from
+# YIELD_MODEL.md/YIELD_optical_s1.md (2026-08-25 or earlier) that predates keep_s1both's
+# row-discipline fix (S1_MODEL.md section 2 -- an S1-free arm scored on a row list one arm
+# cannot fully see manufactured a wrong conclusion once already in this project) and has never
+# been re-run since. This mirrors s1_vs_latest.pbs's approach (2026-09-03) for the classifier
+# and cereal yield -- same keep_s1both population for both arms, including the S1-free baseline,
+# so the two arms differ only in whether S1 is in the feature matrix.
+#
+# User-requested re-test, 2026-09-04, before this goes into any manuscript's Methods section.
+set -euo pipefail
+export PROJ_NETWORK=OFF
+# numpy hints MADV_HUGEPAGE on every large array and gadi runs THP defrag=madvise, so the kernel
+# compacts memory synchronously on those faults: the same 9 km tile ran predict's zonal step in
+# 22-25 s with this off vs 41-396 s with it on, all in system time (PROJ_NOTES 2026-09-09).
+export NUMPY_MADVISE_HUGEPAGE=0
+export OMP_NUM_THREADS=1
+export PYTHONPATH=/g/data/xe2/cb8590/models/pylibs
+PY=/g/data/xe2/John/geospatenv/bin/python
+D=/scratch/xe2/cb8590/paddock-species-data/derived
+RAW=/g/data/xe2/cb8590/paddock-species-data/raw
+REPO=/home/147/cb8590/Projects/paddock-species
+XLSX="$RAW/2017-2024 NVT Yield and Grain Quality - cbradley - 01.05.2025.xlsx"
+cd $REPO/src/paddocks
+
+S1TS=$D/s1_paddock_ts_SENSITIVE.csv
+OPT="$D/samgeo/ts_v2/*_SENSITIVE.csv"
+KEEP=$D/keep_arms/keep_s1both_SENSITIVE.csv
+
+echo "keep_s1both: $(wc -l < $KEEP) rows (reused from s1_vs_latest.pbs, 2026-09-03 -- not rebuilt, nothing upstream has changed)"
+
+$PY train_yield.py --indices "$OPT" \
+    --labeled $D/nvt_trials_labeled.csv --yields "$XLSX" --keep $KEEP --group --crops Canola \
+    --out $REPO/output/CANOLA_YIELD_s1ctl.md
+
+$PY train_yield.py --indices "$OPT" --s1 $S1TS \
+    --labeled $D/nvt_trials_labeled.csv --yields "$XLSX" --keep $KEEP --group --crops Canola \
+    --out $REPO/output/CANOLA_YIELD_s1.md
+
+echo "Done canola_yield_s1"
