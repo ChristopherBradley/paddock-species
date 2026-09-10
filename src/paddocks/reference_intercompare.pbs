@@ -1,0 +1,36 @@
+#!/bin/bash
+#PBS -N ref_intercomp
+#PBS -P xe2
+#PBS -q normal
+#PBS -l ncpus=4
+#PBS -l mem=16GB
+#PBS -l walltime=02:00:00
+#PBS -l storage=gdata/xe2+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+
+# Reference inter-comparison (WorldCereal vs NLUM vs ABS/ABARES): the one stage that cannot run
+# on a login node is the 10 m -> 250 m aggregation of WorldCereal over the cropping zone
+# (~18 M NLUM cells x 2 layers; measured ~2 s per 273x273 block single-threaded, i.e. ~25 min of
+# CPU against the login node's 1800 s limit). 4 CPUs because the warp is embarrassingly parallel
+# by block; 16 GB because the main process holds the two full-grid uint8 fraction rasters
+# (2 x 292 MB) plus the int16 SA2 index (584 MB) while rasterising, and the workers hold only a
+# 256x256 destination block and the ~6,300x6,300 source window each. Expected ~10-15 min wall.
+# `analyse` and `report` run here too so the login node is never touched; `report` alone is cheap
+# and can be re-run on a login node to reword the markdown.
+
+set -euo pipefail
+export PROJ_NETWORK=OFF
+# numpy hints MADV_HUGEPAGE on every large array and gadi runs THP defrag=madvise, so the kernel
+# compacts memory synchronously on those faults: the same 9 km tile ran predict's zonal step in
+# 22-25 s with this off vs 41-396 s with it on, all in system time (PROJ_NOTES 2026-09-09).
+export NUMPY_MADVISE_HUGEPAGE=0
+PY=/g/data/xe2/John/geospatenv/bin/python
+OUT=/scratch/xe2/cb8590/paddock-species-data/derived/reference_intercompare
+REPORT=/home/147/cb8590/Projects/paddock-species/output/REFERENCE_INTERCOMPARISON.md
+cd /home/147/cb8590/Projects/paddock-species/src/paddocks
+
+$PY reference_intercompare.py overlay --out-dir $OUT --workers 4
+$PY reference_intercompare.py analyse --out-dir $OUT
+$PY reference_intercompare.py report  --out-dir $OUT --report $REPORT
