@@ -35,15 +35,22 @@ from pyproj import Transformer
 from merge_tile_boundaries import Lattice
 from boundary_seam_audit import footprint, load
 
-_TO6933 = Transformer.from_crs("EPSG:3577", "EPSG:6933", always_xy=True).transform
+_TX = {}
+
+
+def _to_crs(crs):
+    key = str(crs)
+    if key not in _TX:
+        _TX[key] = Transformer.from_crs("EPSG:3577", crs, always_xy=True).transform
+    return _TX[key]
 
 
 def strip_stats(tif, geom3577):
     """Mean/sd per band of composite pixels under geom (EPSG:3577 -> raster CRS). None if < 6 px."""
     if geom3577.is_empty:
         return None
-    g = shapely.ops.transform(_TO6933, geom3577)
     with rasterio.open(tif) as src:
+        g = shapely.ops.transform(_to_crs(src.crs), geom3577)
         b = g.bounds
         win = src.window(b[0], b[1], b[2], b[3]).round_offsets().round_lengths()
         if win.width < 1 or win.height < 1:

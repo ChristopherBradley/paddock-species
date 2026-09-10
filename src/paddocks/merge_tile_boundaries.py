@@ -160,7 +160,7 @@ class Lattice:
         # explicit overlap, half_m > spacing/2) still get a core of spacing/2. Production tiles
         # have half_m == spacing/2 and this reduces to E = 2 * half_m.
         ux = np.unique(np.round(x)); dx = np.diff(ux); dx = dx[dx > 100]
-        E = float(np.median(dx)) if len(dx) else 2 * half
+        E = float(np.min(dx)) if len(dx) else 2 * half        # smallest step = the lattice spacing, even for a scattered subset
         self.E = float(round(E)); self.half = self.E / 2
         self.tile_half = half            # the query half-width (raster reach), for reporting
         self.ox = float(np.median(x % self.E))
@@ -757,7 +757,7 @@ def main():
         import os
         import rasterio
         from pyproj import Transformer
-        t6933 = Transformer.from_crs("EPSG:6933", "EPSG:3577", always_xy=True)
+        t_cache = {}
         inv_k = {v: k for k, v in lat.stub_k.items()}
         edge_cache = {}
 
@@ -768,11 +768,14 @@ def main():
                     edge_cache[stub] = None
                 else:
                     with rasterio.open(pth) as src:
-                        b = src.bounds
+                        b, crs = src.bounds, str(src.crs)
+                    if crs not in t_cache:
+                        t_cache[crs] = Transformer.from_crs(crs, "EPSG:3577", always_xy=True)
+                    T = t_cache[crs]
                     xs, ys = np.linspace(b.left, b.right, 25), np.linspace(b.bottom, b.top, 25)
                     ring = ([(x, b.bottom) for x in xs] + [(b.right, y) for y in ys] +
                             [(x, b.top) for x in xs[::-1]] + [(b.left, y) for y in ys[::-1]])
-                    edge_cache[stub] = shapely.Polygon([t6933.transform(x, y) for x, y in ring]).exterior.buffer(args.cut_tol)
+                    edge_cache[stub] = shapely.Polygon([T.transform(x, y) for x, y in ring]).exterior.buffer(args.cut_tol)
             return edge_cache[stub]
 
         def cut_of(g, keys):

@@ -16,6 +16,7 @@ from pyproj import Transformer
 ap = argparse.ArgumentParser()
 ap.add_argument("--aois-2024", required=True)
 ap.add_argument("--year", type=int, default=2024)
+ap.add_argument("--half-m", type=float, default=4500.0, help="4850 = 9 km lattice + 350 m buffer each side (TILE_GEOMETRY_DECISION.md)")
 ap.add_argument("--out", required=True)
 a = ap.parse_args()
 A = pd.read_csv(a.aois_2024)
@@ -27,7 +28,7 @@ A["R"], A["C"] = A.grid_r // 3, A.grid_c // 3
 rows = []
 for (R, C), g in A.groupby(["R", "C"]):
     lon, lat = to_ll.transform(float(g.x.mean()), float(g.y.mean()))
-    rows.append(dict(stub=f"nlum9_{a.year}_r{R}_c{C}", lat=lat, lon=lon, half_m=4500,
+    rows.append(dict(stub=f"nlum9_{a.year}_r{R}_c{C}", lat=lat, lon=lon, half_m=a.half_m,
                      start=f"{a.year}-01-01", end=f"{a.year}-12-31", year=a.year, n_trials=int(g.n_trials.sum()),
                      grid_r=int(R), grid_c=int(C), block_r=int(g.block_r.iloc[0]), block_c=int(g.block_c.iloc[0]),
                      n_children=len(g)))

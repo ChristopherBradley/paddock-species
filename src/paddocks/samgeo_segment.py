@@ -150,7 +150,7 @@ def with_retry(fn, *a, tries=6, base=20.0, **kw):
             time.sleep(wait)
 
 
-def build_image(lat, lon, half_m, start, end, out_tif, resolution=10):
+def build_image(lat, lon, half_m, start, end, out_tif, resolution=10, output_crs="EPSG:6933"):
     """3-band Fourier-of-NDWI GeoTIFF, per PaddockTS 01_pre-segment.py."""
     import datacube
     import hdstats
@@ -180,7 +180,9 @@ def build_image(lat, lon, half_m, start, end, out_tif, resolution=10):
         x=(cx - half_m, cx + half_m), y=(cy - half_m, cy + half_m), crs="EPSG:3577",
         time=(start, end),
         measurements=["nbart_green", "nbart_nir_1", "oa_fmask"],
-        output_crs="EPSG:6933",           # equal-area, as PaddockTS uses
+        output_crs=output_crs,            # PaddockTS used EPSG:6933 (the 2022-2024 runs); the 9 km
+        # pipeline uses EPSG:3577 so the raster is the axis-aligned lattice square (+ buffer) and
+        # segmentation and prediction share one grid -- see TILE_GEOMETRY_DECISION.md
         resolution=(-resolution, resolution),
         group_by="solar_day",
         skip_broken_datasets=True,
@@ -271,7 +273,7 @@ def do_presegment(args):
         try:
             n_scenes, shape = with_retry(
                 build_image, float(a["lat"]), float(a["lon"]), float(a["half_m"]),
-                a["start"], a["end"], p["tif"])
+                a["start"], a["end"], p["tif"], output_crs=args.output_crs)
         except Exception as e:                      # one bad AOI must not kill the batch
             print(f"FAILED {a['stub']}: {e}", flush=True)
             log_timing(args.outdir, "presegment",
@@ -503,6 +505,10 @@ def main():
     p1.add_argument("--aois", required=True)
     p1.add_argument("--outdir", required=True)
     p1.add_argument("--force", action="store_true")
+    p1.add_argument("--output-crs", default="EPSG:6933",
+                    help="raster CRS of the composite. EPSG:6933 reproduces the 2022-2024 runs (rotated bbox, "
+                         "~350 m accidental overlap); EPSG:3577 gives the axis-aligned lattice square, so put the "
+                         "overlap in half_m instead (9 km lattice: half_m 4850)")
     p1.add_argument("--max-fail-frac", type=float, default=0.10,
                     help="abort the job (non-zero exit) if more than this fraction of AOIs fail. "
                          "A per-AOI try/except cannot tell a bad tile from a shared service that "

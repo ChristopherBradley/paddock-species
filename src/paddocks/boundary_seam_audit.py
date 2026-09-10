@@ -29,7 +29,14 @@ import rasterio
 
 from merge_tile_boundaries import Lattice, blob_to_geom
 
-_T = Transformer.from_crs("EPSG:6933", "EPSG:3577", always_xy=True)
+_T_CACHE = {}
+
+
+def _to3577(crs):
+    key = str(crs)
+    if key not in _T_CACHE:
+        _T_CACHE[key] = Transformer.from_crs(crs, "EPSG:3577", always_xy=True)
+    return _T_CACHE[key]
 
 
 def footprint(samgeo_dir, stub):
@@ -37,11 +44,12 @@ def footprint(samgeo_dir, stub):
     if not os.path.exists(p):
         return None
     with rasterio.open(p) as src:
-        b = src.bounds
+        b, crs = src.bounds, src.crs
     xs, ys = np.linspace(b.left, b.right, 25), np.linspace(b.bottom, b.top, 25)
     ring = ([(x, b.bottom) for x in xs] + [(b.right, y) for y in ys] +
             [(x, b.top) for x in xs[::-1]] + [(b.left, y) for y in ys[::-1]])
-    return shapely.Polygon([_T.transform(x, y) for x, y in ring])
+    T = _to3577(crs)
+    return shapely.Polygon([T.transform(x, y) for x, y in ring])
 
 
 def load(gpkg, layer):

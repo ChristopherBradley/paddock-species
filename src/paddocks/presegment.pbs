@@ -41,5 +41,5 @@ PY=/g/data/xe2/John/geospatenv/bin/python
 
 cd /home/147/cb8590/Projects/paddock-species/src/paddocks
 echo "presegment AOIS=$AOIS OUTDIR=$OUTDIR ncpus=${PBS_NCPUS:-?}"
-$PY samgeo_segment.py presegment --aois "$AOIS" --outdir "$OUTDIR"
+$PY samgeo_segment.py presegment --aois "$AOIS" --outdir "$OUTDIR" ${PRESEG_EXTRA:-}
 echo "Done presegment"

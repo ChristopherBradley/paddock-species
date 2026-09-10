@@ -22,7 +22,7 @@ PY=/g/data/xe2/John/geospatenv/bin/python
 cd /home/147/cb8590/Projects/paddock-species/src/paddocks
 mkdir -p "$OUTDIR"
 echo "BENCH presegment job=$PBS_JOBID queue=$PBS_QUEUE aois=$AOIS outdir=$OUTDIR host=$(hostname) start=$(date +%s)"
-$PY samgeo_segment.py presegment --aois "$AOIS" --outdir "$OUTDIR" &
+$PY samgeo_segment.py presegment --aois "$AOIS" --outdir "$OUTDIR" ${PRESEG_EXTRA:-} &
 PID=$!
 bash bench/memsample.sh $PID 20 "$OUTDIR/memsample_${PBS_JOBID%%.*}.log" &
 wait $PID

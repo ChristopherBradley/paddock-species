@@ -34,7 +34,6 @@ from merge_tile_boundaries import Lattice
 
 CLS_COLOR = {"Canola": "#ffd400", "Cereal": "#e8772e", "Legume": "#2fbf4f"}
 ABST = "#b0b0b0"
-_T6933 = Transformer.from_crs("EPSG:6933", "EPSG:3577", always_xy=True)
 
 
 def tiles_in_window(lat, inv, bounds):
@@ -53,11 +52,12 @@ def raster_footprint(samgeo_dir, stub):
     if not os.path.exists(p):
         return None
     with rasterio.open(p) as src:
-        b = src.bounds
+        b, crs = src.bounds, src.crs
     xs, ys = np.linspace(b.left, b.right, 25), np.linspace(b.bottom, b.top, 25)
     ring = ([(x, b.bottom) for x in xs] + [(b.right, y) for y in ys] +
             [(x, b.top) for x in xs[::-1]] + [(b.left, y) for y in ys[::-1]])
-    return shapely.Polygon([_T6933.transform(x, y) for x, y in ring])
+    T = Transformer.from_crs(crs, "EPSG:3577", always_xy=True)
+    return shapely.Polygon([T.transform(x, y) for x, y in ring])
 
 
 def rgb_window(samgeo_dir, stubs, bounds, res=10.0):
