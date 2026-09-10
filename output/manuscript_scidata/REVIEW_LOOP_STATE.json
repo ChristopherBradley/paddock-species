@@ -1,0 +1,24 @@
+{
+  "round": 1,
+  "review_mode": "integrated",
+  "revision_mode": "partial",
+  "threadId": null,
+  "reviewer": "cold-read subagent (Codex MCP unavailable)",
+  "manuscript": "output/manuscript_scidata/MANUSCRIPT_DRAFT.md",
+  "plan": "output/PAPER_PLAN_SCIDATA.md",
+  "last_scores": {
+    "structural_fit": 9.0,
+    "claim_evidence_alignment": 6.0,
+    "methods_rigor": 7.0,
+    "technical_validation_completeness": 9.0,
+    "journal_fit": 9.0,
+    "language_flow": 7.0
+  },
+  "scores_note": "Pre-fix scores from the round-1 cold read. Both majors and all addressable moderates/minors dragging claim_evidence_alignment, methods_rigor, and language_flow down have since been fixed; not re-scored this round.",
+  "unresolved_major_ids": [],
+  "carried_over_moderate_ids": [],
+  "status": "completed",
+  "verdict": "almost (pre-fix) -- both named blockers fixed this round without touching E8, the deposit prerequisites, or the deliberate candidate-model exclusion",
+  "next_trigger": "E8 completion, or RSE PAPER_PLAN.md Section 24 Open Issue #8 resolution -- see NEXT_LOOP_PRIORITIES.md",
+  "timestamp": "2026-09-04T00:00:00"
+}
