@@ -74,6 +74,22 @@ def main():
                          "location between runs is not a time series. Use this to extend a "
                          "region that NLUM already picked, and record which run picked it.")
     ap.add_argument("--region-name", default=None, help="name for --centre; defaults to state")
+    ap.add_argument("--offset-seed", type=int, default=None,
+                    help="PROTOTYPE, opt-in (default off, reproduces exactly today's fixed grid "
+                         "when omitted). Draws an independent (dx, dy) per year, uniform over "
+                         "[-half_m, half_m) in both axes -- one full tile width, so every "
+                         "possible grid alignment is reachable -- and shifts that year's whole "
+                         "tile grid by it before laying out cells. Purpose: on the FIXED grid "
+                         "every year cuts a boundary-straddling paddock at the exact same place "
+                         "(PIPELINE_ARCHITECTURE_AND_TILING.md section 5, 6.99-10.25% of "
+                         "national polygons within 10-15m of a grid line, every year identically "
+                         "-- there is no year in which the paddock is ever whole, so no amount of "
+                         "cross-year voting can recover it). An independent offset per year makes "
+                         "the cut fall in a DIFFERENT place each year, so a given paddock is only "
+                         "cut in the minority of years and whole in the rest -- recoverable by "
+                         "consensus, if polygon_stability.py's matching also stops assuming the "
+                         "same (region, cell) label is the same ground across years (it does not, "
+                         "once this is set -- see --spatial-match there).")
     args = ap.parse_args()
 
     import rasterio
@@ -188,10 +204,18 @@ def write_aois(args, picked, to_wgs):
         # Tile centres on an integer grid about the block centre, in Albers metres, so every
         # tile is a true 3 km square and the grid does not shear with latitude.
         offs = (np.arange(g) - (g - 1) / 2) * 2 * hm
-        for i, dy in enumerate(offs):
-            for j, dx in enumerate(offs):
-                lon, lat = to_wgs.transform(p["x"] + dx, p["y"] - dy)
-                for yr in args.years:
+        for yr in args.years:
+            # --offset-seed: shift THIS YEAR's whole grid by an independent (ox, oy) before
+            # laying out cells, so different years cut a boundary-straddling paddock in
+            # different places. rng is seeded per-year (not once for the whole run) so adding a
+            # year to --years never perturbs the offsets already used for the others.
+            ox = oy = 0.0
+            if args.offset_seed is not None:
+                rng = np.random.default_rng(args.offset_seed + yr)
+                ox, oy = rng.uniform(-hm, hm, size=2)
+            for i, dy in enumerate(offs):
+                for j, dx in enumerate(offs):
+                    lon, lat = to_wgs.transform(p["x"] + ox + dx, p["y"] + oy - dy)
                     rows.append({"stub": f"{p['region']}_{yr}_r{i}c{j}",
                                  "lat": round(lat, 6), "lon": round(lon, 6),
                                  "half_m": int(hm), "grid_r": i, "grid_c": j,
