@@ -1,0 +1,50 @@
+#!/bin/bash
+#PBS -N ftw_compare
+#PBS -P xe2
+#PBS -q copyq
+#PBS -l ncpus=1
+#PBS -l mem=32GB
+#PBS -l walltime=06:00:00
+#PBS -l storage=gdata/xe2+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+
+# Fields of the World against SAM over all 557 NVT trials sown in 2024, scaling up the
+# one-site check in PADDOCK_BOUNDARY_BENCHMARK.md (user request, 2026-09-11).
+#
+# copyq, not a login node: the fetch pulls ~5 GB of GeoParquet row groups over HTTP and
+# NCI's KillUserProcesses=yes kills a login-node process the moment the SSH session drops
+# (PROJ_NOTES 2026-09-10). copyq is the queue with outbound internet; compute nodes have none.
+set -euo pipefail
+export PROJ_NETWORK=OFF
+export NUMPY_MADVISE_HUGEPAGE=0
+export OMP_NUM_THREADS=1
+PY=/g/data/xe2/John/geospatenv/bin/python
+D=/scratch/xe2/cb8590/paddock-species-data/derived
+REPO=/home/147/cb8590/Projects/paddock-species
+cd $REPO/src/paddocks
+
+# Skip the fetch when its output is already there, so re-running only the compare step (which
+# reads ~1M SAM polygons and needs ~8 GB, more than a login node allows) costs no network time.
+# Delete the gpkg to force a refetch; the per-row-group stage cache makes that cheap anyway.
+FTW_GPKG=$D/ftw/ftw_2024_sites_SENSITIVE.gpkg
+if [ -s "$FTW_GPKG" ]; then
+    echo "fetch: $FTW_GPKG already present, skipping"
+else
+    $PY ftw_compare.py fetch \
+        --index $D/ftw/ftw_file_index.csv \
+        --sites $D/nvt_trials_labeled.csv \
+        --year 2024 --buffer-m 1000 \
+        --out "$FTW_GPKG"
+fi
+
+$PY ftw_compare.py compare \
+    --ftw "$FTW_GPKG" \
+    --sam $D/national2024_9km/national_2024_crops_final.gpkg \
+    --sites $D/nvt_trials_labeled.csv \
+    --year 2024 --ftw-year 2024 --buffer-m 1000 \
+    --out $REPO/output/FTW_COMPARISON.md \
+    --detail-csv $D/ftw/ftw_site_detail_SENSITIVE.csv
+
+echo "Done ftw_compare"

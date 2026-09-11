@@ -1,0 +1,57 @@
+#!/bin/bash
+#PBS -N yield_refit
+#PBS -P xe2
+#PBS -q normal
+#PBS -l ncpus=12
+#PBS -l mem=64GB
+#PBS -l walltime=03:00:00
+#PBS -l storage=gdata/xe2+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+
+# Refit the yield models on the ADOPTED nine-index feature set (user request, 2026-09-11).
+# The shipped yield model still uses the 51 features from the three original indices, because it
+# was never refitted after the six Sharma et al. (2026) indices were adopted for crop type.
+#
+# Three questions, one run each way:
+#   1. does the nine-index set improve CEREAL yield over the three-index one?
+#   2. can LEGUME yield be modelled at all (never previously attempted)?
+#   3. does CANOLA yield now beat a year+state mean (it did not at three indices: R2 0.271
+#      against 0.290)?
+#
+# Both arms run on the SAME rows and the SAME splits, so the difference between the two reports
+# is the feature set and nothing else. `train_yield.py` scores every arm against a year+state
+# baseline, which is the bar a yield map has to clear to be worth producing.
+set -euo pipefail
+export PROJ_NETWORK=OFF
+export NUMPY_MADVISE_HUGEPAGE=0
+export OMP_NUM_THREADS=1
+export PYTHONPATH=/g/data/xe2/cb8590/models/pylibs
+PY=/g/data/xe2/John/geospatenv/bin/python
+D=/scratch/xe2/cb8590/paddock-species-data/derived
+REPO=/home/147/cb8590/Projects/paddock-species
+RAW=/g/data/xe2/cb8590/paddock-species-data/raw
+# The xlsx filename contains spaces, so it must be quoted at every use.
+XLSX="$RAW/2017-2024 NVT Yield and Grain Quality - cbradley - 01.05.2025.xlsx"
+cd $REPO/src/paddocks
+
+COMMON="--labeled $D/nvt_trials_labeled.csv --keep $D/keep_arms/keep_reviewed_SENSITIVE.csv \
+        --group --crops Cereal Canola Legume"
+
+# Arm A — the adopted nine-index set (3 shipped indices + the Sharma6 from bands), 153 features.
+$PY train_yield.py \
+    --indices "$D/samgeo/ts_v2/*_SENSITIVE.csv" \
+    --bands "$D/samgeo/bands_ts/*_SENSITIVE.csv" \
+    --bands-keep-families ndre2 vi2 vi3 vdvi vci evi2_sharma \
+    --yields "$XLSX" $COMMON \
+    --out $REPO/output/YIELD_GROUP3_9INDEX.md
+
+# Arm B — the shipped three-index set, same rows and splits. This is the comparator; without it
+# any change in Arm A could be the row set rather than the features.
+$PY train_yield.py \
+    --indices "$D/samgeo/ts_v2/*_SENSITIVE.csv" \
+    --yields "$XLSX" $COMMON \
+    --out $REPO/output/YIELD_GROUP3_3INDEX.md
+
+echo "Done yield_refit"

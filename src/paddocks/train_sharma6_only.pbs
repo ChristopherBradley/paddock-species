@@ -1,0 +1,43 @@
+#!/bin/bash
+#PBS -N sharma6_only
+#PBS -P xe2
+#PBS -q normal
+#PBS -l ncpus=12
+#PBS -l mem=32GB
+#PBS -l walltime=01:00:00
+#PBS -l storage=gdata/xe2+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+
+# Sharma et al. (2026)'s six indices ON THEIR OWN (user question, 2026-09-11: "did we ever try
+# just using the 6 indices, without the 3 additional ones we started with?").
+#
+# INDEX_ARCHITECTURE_SWEEP.md never ran this arm. It isolated Sharma's 6 from round 1's five
+# speculative indices, but always alongside the original set, so "the Sharma indices are the
+# real driver" was inferred from orig8+Sharma6 (0.895/0.869) against orig8 alone (0.839/0.854)
+# and never measured with the originals removed. Without --indices there is no shipped-index
+# block at all, and --bands-keep-families drops the raw bands, so this is the six families and
+# nothing else: 6 x 17 = 102 features.
+#
+# Same --keep/--test-keep, same 1651/543 rows, same model and splits as the adopted arm, so the
+# only difference from GROUP3_MODEL_shipped_plus_sharma6.md is the feature set.
+set -euo pipefail
+export PROJ_NETWORK=OFF
+export NUMPY_MADVISE_HUGEPAGE=0
+export OMP_NUM_THREADS=1
+PY=/g/data/xe2/John/geospatenv/bin/python
+D=/scratch/xe2/cb8590/paddock-species-data/derived
+REPO=/home/147/cb8590/Projects/paddock-species
+cd $REPO/src/paddocks
+
+$PY train_species.py \
+    --bands "$D/samgeo/bands_ts/*_SENSITIVE.csv" \
+    --bands-keep-families ndre2 vi2 vi3 vdvi vci evi2_sharma \
+    --labeled $D/nvt_trials_labeled.csv \
+    --keep $D/keep_arms/keep_reviewed_SENSITIVE.csv \
+    --test-keep $D/keep_arms/testkeep_temporal_SENSITIVE.csv \
+    --target group3 --model hgb --importance-repeats 0 \
+    --out $REPO/output/GROUP3_MODEL_sharma6_only.md
+
+echo "Done train_sharma6_only"

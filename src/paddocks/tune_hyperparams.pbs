@@ -1,0 +1,44 @@
+#!/bin/bash
+#PBS -N tune_hyper
+#PBS -P xe2
+#PBS -q normal
+#PBS -l ncpus=12
+#PBS -l mem=32GB
+#PBS -l walltime=05:00:00
+#PBS -l storage=gdata/xe2+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+
+# Grid search over the crop-group classifier's hyperparameters (user request, 2026-09-11):
+# "try fitting hyperparameters. I'm hoping that doesn't help".
+#
+# 288 configurations. Temporal arm searches inside the <=2022 rows only and scores once on the
+# fixed 543-row holdout; spatial arm is NESTED (each outer fold re-searches on its own training
+# rows), so nothing here can leak a test paddock into its own model's settings.
+set -euo pipefail
+export PROJ_NETWORK=OFF
+# numpy hints MADV_HUGEPAGE on every large array and gadi runs THP defrag=madvise, so the kernel
+# compacts memory synchronously on those faults (PROJ_NOTES 2026-09-09).
+export NUMPY_MADVISE_HUGEPAGE=0
+# One BLAS thread per process: joblib already runs 12 workers, and letting each spawn its own
+# thread pool oversubscribes the node.
+export OMP_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+PY=/g/data/xe2/John/geospatenv/bin/python
+D=/scratch/xe2/cb8590/paddock-species-data/derived
+REPO=/home/147/cb8590/Projects/paddock-species
+cd $REPO/src/paddocks
+
+$PY tune_hyperparams.py \
+    --indices "$D/samgeo/ts_v2/*_SENSITIVE.csv" \
+    --bands "$D/samgeo/bands_ts/*_SENSITIVE.csv" \
+    --bands-keep-families ndre2 vi2 vi3 vdvi vci evi2_sharma \
+    --labeled $D/nvt_trials_labeled.csv \
+    --keep $D/keep_arms/keep_reviewed_SENSITIVE.csv \
+    --test-keep $D/keep_arms/testkeep_temporal_SENSITIVE.csv \
+    --n-jobs 12 \
+    --out $REPO/output/HYPERPARAMETER_TUNING.md
+
+echo "Done tune_hyperparams"
