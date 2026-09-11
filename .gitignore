@@ -66,3 +66,14 @@ output/submission*/latex/main.blg
 output/submission*/latex/main.log
 output/submission*/latex/main.out
 output/submission*/latex/main.pdf
+
+# ---- Rendered documents: PDF, Word and LaTeX (user, 2026-09-11). Regenerate them with paper-covert;
+# ---- the repo tracks the markdown sources.
+*.pdf
+*.docx
+*.tex
+*.bib
+*.cls
+*.bst
+*.sty
+**/latex/
