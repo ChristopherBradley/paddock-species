@@ -1,134 +1,132 @@
-# Mapping Canola, Cereal, and Legume Paddocks Across Australia at 10 m
+# Mapping Canola, Cereal and Legume Paddocks Across Australia at 10 m
 
-**Manuscript type**: Data Descriptor — Nature Scientific Data (backup: Data Description article, Earth System Science Data / ESSD) | **Draft status**: PARTIAL (see DRAFT_README.md) | **Date**: 2026-09-04, reviewed 2026-09-04 (paper-review-loop round 1)
-
----
+**Manuscript type**: Data Descriptor, Nature Scientific Data (backup: Earth System Science Data). **Draft status**: every 2024 national number is from the final 2024 map (2026-09-11). XXX marks a number that waits on the 2017-2023 and 2025 national runs, the consensus layer, the dataset DOI, the code repository or a citation to be confirmed.
 
 ---
 
 # Abstract
 
-We present a national, polygon-level dataset of Canola, Cereal, and Legume paddocks across Australia at 10 m resolution, derived from Sentinel-2 imagery and 2,194 trial records from the Grains Research and Development Corporation (GRDC) National Variety Trials. Paddocks are segmented with the Segment Anything Model and classified into three groups by a gradient-boosted spectral-index model. Each polygon carries a predicted class, a confidence score, and yield estimate. The completed 2024 national release contains XXX polygons. [Will add some details about the time-series here once it's done]. The total canola area agrees with independent ABS sown-area statistics [to some degree]. [It agrees with WorldCereal to some other degree]. [Did we manage to reduce the overcall by fixing the overlap issue?]. [Would be nice if we could say we quantitatively compared against Fields of the World and our version was much better. If this isn't possible then I guess we can just say we did this qualitatively]. This is the first publicly available continental map of cropping polygons with species classifications at 10 m resolution for Australia.
+We present a national dataset of canola, cereal and legume paddocks across Australia at 10 m resolution. Paddocks were segmented from Sentinel-2 imagery with the Segment Anything Model and classified into three crop groups by a gradient-boosted model on spectral indices. The classifier was trained on 2,194 Grains Research and Development Corporation (GRDC) National Variety Trial records. Each polygon carries a predicted class, a confidence score and, for cereals, a yield estimate. The 2024 national map contains 1,010,627 polygons, of which 429,951 carry a class. The same pipeline was run for every season from 2017 to 2025. The result is nine annual maps and a consensus layer of XXX paddocks with their crop group in each season. Mapped canola composition tracks Australian Bureau of Statistics sown-area statistics with r = 0.76 across 151 regions. The map calls 1.10 times as much land crop as those statistics record. Crop presence agrees with WorldCereal at 76% of sampled paddocks. This is the first publicly available continental map of cropping polygons with crop group classifications at 10 m resolution for Australia.
 
 ## Keywords
 
-crop-type mapping; Sentinel-2; Segment Anything Model; presence detection; accuracy assessment; gradient boosting; Australia
-
----
+crop-type mapping; Sentinel-2; Segment Anything Model; paddock segmentation; presence detection; gradient boosting; Australia
 
 ---
 
 # Background & Summary
 
-[I'd like the first sentence to just focus on the positives of the grains industry, not mentioning the lack of polygon data. Then maybe the second sentence talks about the importance of having data to track this, for economic and research activities. Then close the paragraph by explaining that this dataset doesn't yet exist and is a gap we can close.] Australia's grains sector — wheat, barley, canola, and pulse/legume crops — is a major export industry with no continent-wide, field-verified, species-resolved crop map publicly available at paddock scale. Official production and area statistics from the Australian Bureau of Statistics (ABS) and the Australian Bureau of Agricultural and Resource Economics and Sciences (ABARES) are available only at coarse administrative-region granularity, with no spatial detail below the Statistical Area Level 2 (SA2) or state level, and the two agencies disagree with each other by a median 6.8% on national sown area — the practical floor against which any finer-grained dataset should be judged. A spatially explicit, species-resolved dataset lets growers, agronomists, and policy analysts see where each crop is actually grown, at paddock scale, rather than inferring it from a regional aggregate.
+Australia's grains industry grows wheat, barley, canola and pulses across a cropping belt that spans every mainland state, and most of the harvest is exported. Knowing where each crop is grown each season supports market forecasting, biosecurity planning, input supply and research into the drivers of production. The Australian Bureau of Statistics (ABS) publishes sown area and production by region and state. The Australian Bureau of Agricultural and Resource Economics and Sciences (ABARES) publishes state and national totals. No public dataset records which crop was grown in which paddock across the whole cropping belt. This dataset closes that gap.
 
-[Focus on what does exist, not what does not exist where possible. I think the last sentence in each paragraph is a nice place to tie back to what does not exist and the novelty of our work, but I prefer if the earlier sentences just focus on what does exist.] Existing global crop-mapping products, including WorldCereal (Van Tricht et al., 2023), classify cropland generically or at coarse crop-type resolution and are built around growing-calendar assumptions that do not match Australia's Southern Hemisphere, canola-and-pulse-rotation grains system. [Should be clear about the availability of these. Can other researchers download these datasets? I'm planning to release my polygons, so that could be a valuable advantage of my dataset, as well as being national and a 9 year time-series.] The two closest Australian precedents — an in-season Sentinel-2 classifier for six classes in Western Australia (Sharma et al., 2026) and a Sentinel-1/Sentinel-2/MODIS fusion classifier for cereals-versus-canola in the Murray-Darling Basin (Al-Shammari et al., 2024) — are both regional, and both train on either another model's output or opportunistic harvester-derived labels rather than field-verified ground truth.
+Several products map cropland at national or global scale. WorldCereal (Van Tricht et al., 2023) provides global 10 m maps of temporary crops, maize and winter and spring cereals from Sentinel-1 and Sentinel-2. Its maps can be downloaded freely under a CC BY 4.0 licence, but it has no canola or legume class. The National Land Use Map (NLUM) of ABARES provides 250 m probability surfaces per commodity for the 2020-21 season (ABARES, 2024). Two regional studies have classified crop types in Australia at 10 m. Sharma et al. (2026) mapped six crops in Western Australia from Sentinel-2 time series. Al-Shammari et al. (2024) separated cereals from canola across the Murray-Darling Basin with Sentinel-1, Sentinel-2 and MODIS. Both report accuracies above 90% within their regions. Both trained on labels that are not public: another model's predictions and harvester yield maps respectively. We could not find a public release of either classified map. This dataset adds national coverage of three crop groups, released as paddock polygons, for nine seasons.
 
-[Focus on what my dataset does, not what other datasets don't do. I don't want my paper sounding like a political argument of bashing each others work.] This dataset closes that specific gap. It is continent-wide, trains on GRDC National Variety Trial records and segments paddocks with the Segment Anything Model (SAM; Kirillov et al., 2023). Each polygon is classified into one of three broad groups: canola; cereals (wheat, barley and oat), and legumes (chickpea, faba bean, field pea, lentil and lupin) by a gradient-boosted spectral-index model. Every polygon carries either a predicted class and confidence, predicted yield, and extra attributes such as [is there a better term for this?] green-up intensity that can be used to filter out polygons unlikely to have grown a crop in that year.
+This dataset maps every segmented paddock in the Australian cropping belt from Sentinel-2 imagery. Paddocks were segmented with the Segment Anything Model (SAM, Kirillov et al., 2023). They were classified with a gradient-boosted model trained on GRDC National Variety Trial (NVT) records. Each polygon is assigned to one of three groups: canola, cereals (wheat, barley and oat) or legumes (chickpea, faba bean, field pea, lentil and lupin). Every polygon carries either a predicted class with its confidence, or the reason it was not classified. Cereal polygons also carry a yield estimate. Each polygon records its seasonal NDVI amplitude, which a user can apply to remove polygons unlikely to have grown a crop that year.
 
-The completed 2024 national release contains XXX segmented polygons. A nine-year (2017-2025), 100 km regional companion product, covering a mixed-cropping district of the Riverina, New South Wales, demonstrates the identical pipeline's behaviour across multiple growing seasons, including polygon geometric stability and year-to-year coverage. A national multi-year extension (2017-2023, 2025), applying the identical pipeline nationally across all nine seasons is released at XXX. Results of the national multi-year product is described in this paper.
+The 2024 national map contains 1,010,627 polygons over 15,968 tiles of 9 km, of which 429,951 carry a class. The same pipeline was applied without change to every season from 2017 to 2025. The result is nine annual national maps and a consensus layer of XXX paddocks. The consensus layer links each paddock across seasons and records its crop group in each one.
 
-We validated the total cropping area against independent ABS sown-area statistics, as well as WorldCereal and the National Land Use Map (NLUM). [Way too many adjectives and double banger words, see style guide in the shelterbelts project.] This dataset provides the first continent-wide, paddock-scale, field-verified crop-species product for the Australian grains sector, together with a quantified, disclosed characterization of its own known limitations — principally an area over-call relative to ABS, concentrated in the Cereal and Legume classes — reported in full in Technical Validation below.
-
----
+We validated the maps against ABS sown-area statistics and compared them with WorldCereal and NLUM. Canola composition tracks ABS with r = 0.76 across 151 regions, and the map calls 1.10 times as much land crop as ABS records. The excess sits in the cereal and legume classes rather than canola. Technical Validation reports these comparisons in full, and Usage Notes describes the fields a user can filter on to tighten the map.
 
 ---
 
 # Methods
 
-Fig. 1 gives a pipeline overview alongside an example map which is a useful orientation to the stage-by-stage description below.
+Fig. 1 gives a pipeline overview alongside an example map, as an orientation to the stages described below.
 
 ## Study extent and temporal scope
 
-The national 2024 release covers continent-wide Australia: 99,465 processed tiles, restricted to the extent that NLUM v7 indicates carries non-trivial agricultural probability for one of the three target crop groups. The national map was processed using the same algorithm for all 9 years of 2017-2025. All spatial processing and reported geometry use EPSG:3577 (GDA94 / Australian Albers Equal Area). [Presumably we have two main units: number of paddock polygons, and area]
+The national maps cover the Australian cropping belt as 15,968 tiles of 9 km (Fig. 2). A tile was kept if it contained at least one 250 m NLUM pixel with a probability above 25% for winter cereals, oilseeds or legumes. Every season from 2017 to 2025 was processed on this same grid. Results are reported in two units: the number of paddock polygons and their area in hectares. All geometry is stored in EPSG:3577 (GDA94 / Australian Albers).
 
 ## Data sources
 
-Sentinel-2 surface-reflectance imagery was accessed via Digital Earth Australia's Analysis Ready Data product (`ga_s2am/bm/cm_ard_3`) through the National Computational Infrastructure's datacube. Ground truth for classifier and yield-model training is drawn from the Grains Research and Development Corporation (GRDC) National Variety Trial (NVT) obtained on XXX date. This dataset contained XXX trial sites, which was reduced to XXX locations where just a single crop group was grown (canola, cereals, or legumes). [Should move this to the data availability statement. Don't need to reproduce twice.] The dataset is covered by a data-use agreement but can be requested from the GRDC via this form (XXX).
+Sentinel-2 surface reflectance was read from Digital Earth Australia's analysis-ready products (`ga_s2am_ard_3`, `ga_s2bm_ard_3` and `ga_s2cm_ard_3`) through the National Computational Infrastructure datacube. Ground truth for the classifier and the yield model came from the GRDC National Variety Trials, obtained on 1 May 2025. The file records 4,502 trials of nine crops sown from 2017 to 2024, of which 4,479 have valid coordinates. Each trial coordinate marks a corner of a small block of variety plots inside a commercial paddock. NVT protocol requires the surrounding paddock to be sown to the same crop within about two weeks of the trial (GRDC, XXXX). The paddock around a trial point is therefore a labelled sample of that crop. Newman and Furbank (2021) describe the same trial network.
 
- Independent validation uses ABS sown-area statistics and ABARES production statistics [What is the SA2 level? Do we describe that abbreviation somewhere?]. National Land Use Map (NLUM) v7 250 m per-commodity agricultural probability surfaces (2020-21) were used to mask the segmentation to tiles with non-null cropping probability. It was also used to compare the ratios of land area of the resulting crop groups. [This sentence and everything after probably belongs in the following segmentation section, rather than "data sources"] Paddock boundaries were delineated with the Segment Anything Model (`vit_h` checkpoint, stock parameters; Kirillov et al., 2023) via the SAMGeo/PaddockTS wrapper. The tile size used was 9km with 350m overlap and polygons were merged if any polygons overlapped between tiles. A 3km tile size was also tested which identified some additional cropping polygons, and some additional non-cropping polygons. The 9km tile size was chosen as it visually appeared to be correct more often, and better matched the independent validation cropping area totals. Further work could investigate using multiple tile sizes and offsets to find additional polygons that are missed from the current product. 
- [Something about how paddocks were marked as abstained]
+Independent validation used ABS sown-area statistics by Statistical Area Level 2 (SA2), the smallest region for which ABS publishes sown area, for 2022 to 2024. ABARES state-level sown area was used as a second reference series. The NLUM v7 250 m per-commodity probability surfaces for 2020-21 (ABARES, 2024) were used to select the tiles above. They were also used as an independent comparison product. WorldCereal 2021 v100 (Van Tricht et al., 2023) was used as a second comparison product.
 
 ## Segmentation
 
-Segmented polygons were retained only within a 5-300 ha area range with a compactness ratio (perimeter / sqrt(area)) of at most 8. 
+Paddock boundaries were delineated with the Segment Anything Model (`vit_h` checkpoint, default parameters, Kirillov et al., 2023). SAM was run through the samgeo wrapper (Wu and Osco, 2023), following the PaddockTS workflow (XXX). The input to SAM for each tile was a three-band composite of the seasonal NDWI time series (its leading Fourier components, as in PaddockTS). Each tile's raster extends about 350 m past its 9 km square, so neighbouring tiles see the same paddocks along their edges. Each tile was treated as authoritative inside its own square. Under that rule, polygons duplicated in the overlap band were removed and truncated views of one paddock were unioned. Any polygons still overlapping after that step were merged into one polygon carrying the attributes of its largest member. Merged polygons over 300 ha were then marked as unsegmented, in the same way as single polygons over that size (Abstention rules).
 
-[I think this sentence is based on data from Agriwebb? So needs to be removed.] This is estimated to retain 77.9% of known crop paddocks in validation while rejecting 65% of pasture polygons, at a cost of excluding 22% of real crop paddocks that fall outside the size/shape mask.
+Segmented polygons were retained only within a 5-300 ha area range and with a compactness ratio (perimeter / sqrt(area)) of at most 8. Of the 270 NVT trials sown in 2024, 80.4% fell inside a segmented polygon and 76.3% inside one that passed this filter. A 3 km tile size was also tested. It found some additional cropping polygons and some additional non-cropping polygons. It also cut more paddocks at tile edges (57% of classified polygons against 16% at 9 km). The 9 km tile size appeared correct more often on inspection and better matched the independent area totals. It also cost 14% less per season. Fields of the World (Kerner et al., 2024) was tested as an alternative boundary source at one trial site. Its polygon merged the trial paddock with two neighbours (339 ha against 57 ha from SAM). In the surrounding 3 km, 79% of its polygons were slivers under 1 ha. Further work could combine several tile sizes and offsets to recover paddocks the current product misses.
 
 ## Feature construction
 
-[This sentence should be split into multiple sentences of length 10-25 words.]
-Fifty-one paddock-median spectral features were computed per retained polygon: spatial medians over 10 m-eroded, cloud-masked paddock pixels per observation date, then temporal medians across dates within 20-day day-of-year bins across the growing season, from three per-pixel indices — NDVI, a canola-specific flowering index following the general approach of Ashourloo et al. (2019), and a chlorophyll-fluorescence-related index.
+Each retained polygon was described by 153 paddock-median spectral features. Nine indices were computed per pixel and date. Three form the original set. They are NDVI, the normalised difference yellowness index (NDYI, Sulik and Long, 2016) and the canola flower index (CFI, Tian et al., 2022). Six are the band-derived indices used by Sharma et al. (2026): NDRE2, VI2, VI3, VDVI, VCI and EVI2. For each date, the spatial median was taken over cloud-masked pixels inside the polygon eroded by 10 m. The dates were then grouped into 13 bins of 20 days, from day 90 to day 350 of the year. The median was taken within each bin. Four whole-season summaries were added per index: the 10th and 90th percentiles, their difference (the amplitude) and the day of year of the peak. This gives 17 features per index.
 
 ## Labelling
 
-GRDC NVT points were matched to their enclosing [I thought we removed the nearest plausible function, so it had to be enclosing?] SAM polygon, corresponding to the surrounding paddock around the trial site. Trials that had multiple different crop groups within the same paddock were removed, as that made the category of the surrounding paddock unclear. [Have we already specified which species are in which groups? If so, I don't think we need to respecify it here. If not, then we should specify it here] We reduced the initial 9 crop types into three broad groups, partly because this reduced conflicts within a paddock increasing the sample size by [is this number correct?] 69%, and partly because crop types within the same broad group were highly spectrally similar. This meant that training a 9-species classifier resulted in an F1 of only 32%, compared to the final F1 of [is this number from the latest 153 index model?] 82% in the 3-species classifier. 
+Each NVT trial point was matched to the SAM polygon containing it, or to the nearest polygon within 50 m where no polygon contained it. A trial point often sits in a road verge or laneway strip beside its paddock. A match smaller than 10 ha was therefore replaced by a paddock-shaped neighbour at least three times larger within 150 m. 3,439 trials had a matched polygon and a paddock time series. Trials were then dropped where the polygon was not a plausible paddock. The rules were compactness above 6, area outside 5-300 ha, tree cover above 20% or fewer than 15 clear observations. These rules were set from a hand review of a stratified sample of 96 matches in Sentinel-2 imagery. The two reviewers agreed on usability for 96% of the trials both saw. The review changed no labels.
 
-[I think my hand-review just helped establish the rules to ignore conflicting categories. I didn't actually relabel anything.] [I think we removed this remapping rule in the latest version?].
+NVT sites often hold trials of several crops side by side in one paddock. Trials that shared a polygon with a trial of a different crop group in the same year were removed. The category of such a paddock is unclear. We reduced the nine crops to the three groups defined above for two reasons. Co-located trials are usually of the same agronomic group, so the grouping resolves 69% of the shared-paddock conflicts (540 of 788). Crops within a group are also spectrally similar. A nine-species classifier reached a macro F1 of only 0.38, against 0.78 for the three groups on the same trials and features. After these steps 2,194 trials remained for training and testing: 585 canola, 1,119 cereal and 490 legume.
 
 ## Classification
 
-Species-group labels are predicted by a `HistGradientBoostingClassifier` operating on the [Don't like the term hand-built. Need to update this to the actual number in the latest model] XXX spectral features described above, evaluated both temporally (training on trials sown 2022 or earlier, testing on 543 fixed trials sown 2023-2024) and spatially (5-fold `GroupKFold` on trial site). We trialled a Presto model, random forest, [anything else we trialled?] but found the HistGradientBoostingClassifier to work best.
-
-The classifier is trained class-balanced, with geographic location deliberately excluded. [Should we have tried tuning the hyperparameters to better predict the NVT data?] Hyperparameters follow scikit-learn's `HistGradientBoostingClassifier` defaults with no additional tuning beyond the feature-set and label-scheme decisions described above.
-
-
-## Presence gating
-
-[I don't like the word 'shipped' in a paper. This sentence can probably be moved to the end of the yield estimation paragraph.]
-We included a presence gate based on NDVI amplitude (90th minus 10th percentile) at a threshold of 0.35. It is fitted presence-only on the full 3,439 known-sown NVT trials with a held-out recall of 91.6%. [Don't think the phenology gate is interesting enough to write about if we didn't include it in the final dataset.] 
+Crop groups were predicted by a `HistGradientBoostingClassifier` (scikit-learn, Pedregosa et al., 2011) on the 153 features described above. The classifier was trained class-balanced, with geographic location excluded from the features. Hyperparameters were left at the scikit-learn defaults. The model was evaluated two ways on a fixed test set of 543 trials sown in 2023-2024. The temporal split trained on trials sown 2022 or earlier. The spatial split used five-fold `GroupKFold` grouped by trial site. The two numbers therefore differ only in the question asked, transfer across seasons or transfer to new sites, and not in which rows were scored. The first version of the classifier used the three original indices (51 features). Adding the six Sharma et al. (2026) indices raised macro F1 from 0.821 to 0.890 (temporal) and from 0.823 to 0.892 (spatial). The gain was concentrated in the legume class. We also trialled random forests, extra trees, logistic regression, fine-tuned Presto embeddings (Tseng et al., 2024) and Sentinel-1 backscatter as additional features. None beat the gradient-boosted model on the spectral indices alone (Technical Validation).
 
 ## Yield estimation
 
-Cereal yield (pooled wheat, barley, and oat) is estimated by a `HistGradientBoostingRegressor` on the same [wrong feature count] XXX-feature contract, calibrated to ABS with a single national multiplicative factor [Did this change with the latest model?] (XXX) fit on one year of ABS data and checked against two held-out years [Guessing also wrong?](+XXX% to +XXX% error). Both raw (NVT-trial-equivalent) and ABS-calibrated yield columns are provided with each cereal polygon. We did not provide yield estimates for canola and legumes as these predictions were no better than just taking a state-year average. [Is this correct?] We found that Sentinel-1 improved canola yield estimates, but did not adopt this for the national runs due to compute constraints.
+Cereal yield (wheat, barley and oat pooled) was estimated by a `HistGradientBoostingRegressor` trained on 1,119 cereal trials. It uses the 51 features from the three original indices. NVT trial yields exceed commercial paddock yields, so the model output was calibrated to ABS with a single national multiplicative factor of 0.6248. The factor was fitted on the 2022 ABS implied yield and checked on 2023 and 2024. The calibrated NVT median fell within 18.1% and 3.1% of the ABS figure in those years. Both the raw (NVT-equivalent) and the calibrated yield are provided on every classified cereal polygon. Canola yield is not provided because an optical-only model was no better than a year-and-state mean (spatial-transfer R² 0.271 against 0.290). Adding Sentinel-1 backscatter raised canola R² to 0.371 and also improved the cereal model, but Sentinel-1 was not acquired nationally because of the compute cost. Legume yield was not modelled.
 
-[A graph showing the cereal yield correlation would be good here.]
+## Abstention rules
+
+A polygon was classified only if it passed four checks, and otherwise carries the reason it failed. Polygons under 5 ha are marked `area_below_min`. Polygons over 300 ha are marked `unsegmented_blob`, since above that size SAM has usually merged several fields into one shape. Polygons with fewer than 10 clear observations are marked `too_few_observations`. Polygons whose NDVI amplitude (90th minus 10th percentile of the paddock-median series) is below 0.35 are marked `no_crop_signal`. The classifier was trained only on trial paddocks known to be cropped. This presence gate is therefore what separates cropped paddocks from pasture and other land that passes the size filter. The 0.35 threshold was fitted on the 3,439 NVT trial paddocks, of which 91.6% pass it. Every polygon carries its NDVI amplitude, so a user can apply a stricter threshold (Usage Notes).
 
 ## Validation protocol
 
-[Keep sentences under 25 words, stick to just full stops, commas and parenthesis wher possible]
-Composition and area were compared against ABS sown-area statistics across SA2s where the mapped footprint covers at least 50% of the [What is SA2?] SA2 (133 SA2s nationally). [What an awful word. Can we avoid hyphens where possible?] [Don't like the word genuine]. The national map was also compared against WorldCereal 2021 and NLUM 250 m per-commodity probability surfaces, on a stratified random sample of 250,000 of the [out-of-date I think] 1,346,582 national paddock centroids. [Given this is the methods section, I wouldn't expect the results to be here anyway. I think it's only worth mentioning something is reported somewhere else, if it would otherwise be expected to be reported here]
+Composition and area were compared against ABS sown area for 2024. The comparison used the 151 SA2s where the mapped tiles cover at least 50% of the SA2. Two comparisons were made. The composition comparison asks whether the share of mapped crop area in each class matches the ABS share. The area comparison asks whether the map calls more or less land crop than ABS records as sown. The two together separate a presence error, which changes area, from a classification error, which changes composition. An argmax-versus-mean-probability check tested whether any composition error could be a decision-rule artefact. A sensitivity table reports classified area and composition error at five NDVI amplitude thresholds. Note this is a sensitivity check, not a fitting procedure. Choosing the threshold that best matches ABS would make ABS a training set and remove the only independent check available. No probability sample of crop labels exists for Australia at the density an Olofsson et al. (2014) area estimate would need. No confidence intervals on area are therefore reported.
 
-## Multi-year pipeline
+The 2024 map was also compared at the pixel level with WorldCereal 2021 v100 and the NLUM v7 probability surfaces. The comparison used a random sample of 250,000 of the 1,010,627 paddock centroids. WorldCereal has no canola or legume class, so it was used to check crop presence (its `temporarycrops` layer) and the cereal class (its `wintercereals` layer). NLUM was used to check whether polygons of each class sit on land NLUM rates as probable for that commodity. NLUM's commodity layers are not on a common scale, so each class was scored by an enrichment ratio. The ratio is the median NLUM probability at that class's centroids divided by the median at abstained centroids.
 
-[I want to just prepare the final paper as closely as possible now, and then slot in new numbers once I do the complete run. There's no point describing an initial pilot run like this paragraph.]
-We ran the full pipeline on every year from 2017-2025. 
+Finally, the map itself was scored at the 533 fixed test trials from 2023 and 2024 that fall on the tile grid. A copy of the classifier trained on trials sown 2022 or earlier was used. This checks the released pipeline, including segmentation and the abstention rules, rather than the feature-level model alone.
+
+## Multi-year processing
+
+The pipeline above was applied to every season from 2017 to 2025 on the same 15,968-tile grid. No model was refitted on a later season. Polygons were matched between seasons where their intersection over union (IoU) was at least 0.5. A consensus layer was built from paddocks found in at least five of the nine seasons. The outline was taken from the season in which the paddock was largest. Each consensus paddock carries the crop group and confidence of its matched polygon in every season. The same 5-300 ha filter as the annual maps applies. The ABS comparison above was repeated for 2022 and 2023, the other seasons with SA2 sown-area statistics. Mapped state totals were compared with ABARES sown area for all nine seasons, excluding figures still flagged as forecasts. Crop sequences were counted on consensus paddocks classified in consecutive seasons.
 
 ---
 
 # Data Records
 
-[Product 1: 9x national gpkgs. Product 2: a single merged gpkg showing consensus polygons with metadata for those polygons showing the crop type in each year from 2017-2025. Should update the rest of this data records section accordingly.]
-The dataset is released as two products, both in GeoPackage format (EPSG:3577, GDA94 / Australian Albers), described below. **[PENDING — data deposit]**: both products will be assigned a persistent identifier (DOI) at a public repository before submission; this section will be updated with the resolved identifier(s).
+The dataset is released as two products in GeoPackage format (EPSG:3577, GDA94 / Australian Albers), deposited at XXX under DOI XXX.
 
-## National 2024 release
+## Product 1: annual national maps, 2017-2025
 
-Fig. 2 shows the national tile coverage, the 100 km Riverina regional block, and the SA2 regions used for ABS validation (Technical Validation); Fig. 4 shows the released classes at national extent, rasterised to a 3 km majority-class grid for legibility (individual paddocks are far smaller than one printed pixel at national scale — Fig. 4 is a density visualization for orientation, not the polygon layer itself, which is the actual data record).
+Nine GeoPackages, one per season, share a single schema. Each row is one segmented paddock polygon. Fig. 2 shows the tile grid and the SA2s used for validation. Fig. 3 shows the 2024 map at national extent, rasterised to a 3 km majority-class grid. Individual paddocks are smaller than a printed pixel at that scale. Table 1 gives the totals per season.
 
-The primary product is a single national GeoPackage, 2.8 GB, containing 1,346,582 segmented polygons across 99,465 processed tiles (98.9% of the national extent carrying non-trivial agricultural probability for one of the three target crop groups, per NLUM). Each row is one segmented paddock polygon and carries:
+**Table 1.** Annual national maps. Classified polygons carry a predicted class and the remainder carry an abstain reason.
 
-- **`pred`** — the predicted class (`Canola`, `Cereal`, or `Legume`) where classified, or null where the polygon did not clear the presence gate.
-- **`abstain_reason`** — populated only where `pred` is null; one of four values: `area_below_min` (339,043 polygons), `no_crop_signal` (269,134), `unsegmented_blob` (48,016), or `too_few_observations` (39,623). No polygon is silently dropped: every row in the release carries either a class or a named reason it was not classified.
-- **`confidence`** — the classifier's predicted-class probability; null where `pred` is null, since a polygon that did not clear the presence gate was never scored by the classifier.
-- **`ndvi_amp`** — the NDVI amplitude (90th minus 10th percentile) used by the presence gate; shipped on every polygon regardless of gate outcome, so a downstream user can apply a stricter threshold than the shipped 0.35 cutoff without re-deriving the underlying signal.
-- **`yield_tha_raw`**, **`yield_tha_calibrated`** — populated only where `pred = Cereal`; raw (NVT-trial-equivalent) and ABS-calibrated Cereal yield in tonnes per hectare, respectively (Methods). No yield fields are populated for Canola or Legume polygons.
-- **`geometry`** — the segmented paddock polygon.
+| Season | Polygons | Classified polygons | Classified area (M ha) | File size |
+|---|---:|---:|---:|---:|
+| 2017 | XXX | XXX | XXX | XXX |
+| 2018 | XXX | XXX | XXX | XXX |
+| 2019 | XXX | XXX | XXX | XXX |
+| 2020 | XXX | XXX | XXX | XXX |
+| 2021 | XXX | XXX | XXX | XXX |
+| 2022 | XXX | XXX | XXX | XXX |
+| 2023 | XXX | XXX | XXX | XXX |
+| 2024 | 1,010,627 | 429,951 (42.5%) | 19.6 | 3.2 GB |
+| 2025 | XXX | XXX | XXX | XXX |
 
-Of the 1,346,582 polygons, 48.4% (34.4% of total mapped area) carry a classification; the remaining 51.6% carry one of the four abstain reasons above. A derived, classified-only subset (650,766 rows, dropping abstained polygons and the `abstain_reason`/`ndvi_amp` fields) is also provided for users who need only classified paddocks; it should not be used for any claim about abstain rate, total polygon count, or total mapped area, since it silently removes exactly the rows those claims depend on.
+Each polygon carries the following fields.
 
-## Nine-year regional companion (2017-2025, 100 km, Riverina)
+- `pred`: the predicted class (`Canola`, `Cereal` or `Legume`), or null where the polygon was not classified.
+- `abstain_reason`: why a polygon was not classified, one of `area_below_min`, `no_crop_signal`, `too_few_observations` or `unsegmented_blob` (Methods). In 2024 these hold 305,943, 227,263, 38,177 and 9,293 polygons respectively. A fifth value, `no_crop_shape`, flags a classified polygon whose seasonal NDVI curve lacks a clear green-up and senescence. Such a polygon keeps its class and counts as classified in every total reported here.
+- `confidence`: the classifier's probability for the predicted class, and `p_canola`, `p_cereal` and `p_legume`, the probability of each class. Null where `pred` is null.
+- `ndvi_amp`: the NDVI amplitude used by the presence gate, on every polygon.
+- `yield_tha` and `yield_tha_calibrated`: raw (NVT-equivalent) and ABS-calibrated cereal yield in tonnes per hectare, on cereal polygons only.
+- `area_ha`, `compactness`, `n_obs`, `clear_frac` and `treed_frac`: the polygon's area, compactness ratio, number of clear Sentinel-2 observations, mean clear fraction and estimated tree cover fraction.
+- `year` and `stub`: the season and the tile the polygon came from.
+- Provenance of the tile-overlap merge: `boundary_action`, `merge_n`, `class_conflict`, `raster_cut_m` and `overlap_merge_n`. `raster_cut_m` is the length of boundary within 30 m of the tile's raster edge, and `class_conflict` marks a paddock whose two tile views disagreed on class. Both can be used as quality flags.
+- `geometry`: the paddock polygon.
 
-A 100 km × 100 km block in the Riverina, New South Wales, processed with the identical pipeline across all nine seasons 2017-2025, is released as nine per-year GeoPackages (one per season) plus a consensus GeoPackage linking each paddock's identity across years (union-find on inter-year IoU ≥ 0.5, paddock outline taken from the season in which it was largest). This product carries the same per-polygon fields as the national release, plus year and a stability flag (found in ≥5 of 9 years). It exists specifically to demonstrate multi-year pipeline behaviour — polygon geometric stability, year-to-year coverage — ahead of the national multi-year release described below, and should not be treated as a substitute for national-extent coverage in any of the nine years it spans.
+Two derived subsets accompany each annual file for convenience. The classified subset keeps only polygons with a class, with `pred` renamed `predicted_crop_type` and a QGIS style embedded. The strict subset keeps only polygons with a class and an empty `abstain_reason`. For 2024 these hold 429,951 and 344,868 polygons. Neither subset should be used for any claim about abstain rates, total polygon counts or total mapped area. Each removes the rows those claims depend on.
 
-## Planned update: national multi-year release (2017-2023, 2025)
+## Product 2: consensus paddock layer, 2017-2025
 
-A national-scale re-run of the identical pipeline across all nine seasons (2017-2025) is in progress at the time of this Data Descriptor, with two of nine seasons (2023, 2024) complete. Once complete, per-year national GeoPackages with the same schema as the 2024 release above will be added as a dataset update, and this section will be revised to describe them. **[PENDING: national 2017-2025 multi-year run]** — no national multi-year files exist in the current release.
+One GeoPackage holds one polygon per paddock that at least five of the nine annual segmentations agreed on, filtered to 5-300 ha. It contains XXX paddocks. Each carries `crop_<year>` and `conf_<year>` for every season from 2017 to 2025. It also records the number of seasons in which the paddock was found and classified, and the number of distinct crop groups it grew. The outline is one season's real segmentation rather than an average across seasons, since an averaged boundary matches no year's imagery. Note this means `crop_2019`, for example, is the class of the 2019 polygon matched to the consensus outline, whose boundary differs by a few metres.
 
-## Model artifacts
+## Model artefacts
 
-The classifier (`group3_map.joblib`) and Cereal yield model (`cereal_yield.joblib`) used to produce the national and regional products above are released alongside the data (Code Availability), so that a user can verify or re-derive predictions from the same 51-feature paddock-median input used to generate this release.
-
----
+The classifier (`group3_map_sharma6.joblib`) and the cereal yield model (`cereal_yield.joblib`) are released with the data (Code Availability). A user can re-derive any prediction from the 153-feature paddock-median input described in Methods.
 
 ---
 
@@ -136,25 +134,30 @@ The classifier (`group3_map.joblib`) and Cereal yield model (`cereal_yield.jobli
 
 ## Classifier accuracy
 
-[Need to update all of these results based on the latest model.]
-The classifier reaches macro F1 0.821 under temporal transfer (training on trials sown 2022 or earlier, testing on 543 fixed trials sown 2023-2024) and 0.823 under spatial transfer (5-fold `GroupKFold` on trial site), against a 543-trial fixed test set common to both splits. Canola is detected at 89.0% recall at a 5% false-positive rate (average precision 0.944, ROC AUC 0.965).
+The classifier reaches a macro F1 of 0.890 under temporal transfer and 0.892 under spatial transfer (Table 2, Fig. 4). Both are scored on the fixed test set of 543 trials. Canola is detected at 89.0% recall at a 5% false-positive rate (average precision 0.935, ROC AUC 0.962). Legume is the weakest class in both splits, with precision 0.77 and 0.79. The main confusion is canola predicted as legume (19 of 155 true canola paddocks under temporal transfer, 16 under spatial transfer). The next is cereal predicted as legume (10 and 8 of 279).
+
+**Table 2.** Classifier accuracy by class and split, 543 fixed test trials sown in 2023-2024.
 
 | Split (macro F1) | Class | Precision | Recall | F1 | n |
 |---|---|---|---|---|---|
-| Temporal (0.821) | Canola | 0.94 | 0.83 | 0.88 | 155 |
-| | Cereal | 0.89 | 0.90 | 0.90 | 279 |
-| | Legume | 0.65 | 0.73 | 0.69 | 109 |
-| Spatial (0.823) | Canola | 0.91 | 0.86 | 0.88 | 155 |
-| | Cereal | 0.89 | 0.91 | 0.90 | 279 |
-| | Legume | 0.68 | 0.70 | 0.69 | 109 |
+| Temporal (0.890) | Canola | 0.93 | 0.85 | 0.89 | 155 |
+| | Cereal | 0.96 | 0.95 | 0.96 | 279 |
+| | Legume | 0.77 | 0.89 | 0.83 | 109 |
+| Spatial (0.892) | Canola | 0.91 | 0.88 | 0.89 | 155 |
+| | Cereal | 0.97 | 0.96 | 0.96 | 279 |
+| | Legume | 0.79 | 0.85 | 0.82 | 109 |
 
-Legume is the floor in both splits, driven predominantly by Cereal paddocks misclassified as Legume (23 of 279 true Cereal paddocks under temporal transfer, 22 of 279 under spatial transfer) rather than the reverse. Fig. 3 shows both confusion matrices directly.
+The alternatives listed in Methods were scored on the same test set. With the three original indices, random forests (0.830 temporal, 0.820 spatial) and extra trees (0.823, 0.819) matched the gradient-boosted model (0.821, 0.823). Logistic regression fell short (0.745, 0.768). Fine-tuned Presto embeddings scored 0.775 alone and 0.824 combined with the indices. Adding Sentinel-1 backscatter to the final classifier lowered macro F1 by 0.023 (temporal) and 0.018 (spatial), concentrated in the legume class.
 
-## Composition and area validation against ABS
+## Map accuracy at trial sites
 
-Validated against ABS sown-area statistics across the 133 SA2s where the mapped footprint covers at least 50% of the SA2, mapped canola composition — its share of total mapped crop area — tracks the ABS canola share closely: r = 0.82, median absolute error 5.5 percentage points, below the 6.8% median disagreement between ABS and ABARES that this dataset's validation treats as the accuracy floor for any map-versus-official-statistic comparison (ABS and ABARES are two official series that themselves disagree by that amount; no validation number tighter than this should be read as more precise than the reference data allows).
+The released pipeline was scored at the 533 test trials from 2023 and 2024 that fall on the tile grid. The classifier copy trained on trials sown 2022 or earlier was used. 122 sites had no segmented polygon and 62 fell in a polygon that abstained. On the 349 scored sites the map reached a macro F1 of 0.898 (canola 0.893, cereal 0.952, legume 0.848). The polygon containing a site was within a factor of two of the trial paddock's recorded area at 91% of sites.
 
-The 6.8% floor itself is derived directly from ABS and ABARES's own mutual disagreement, shown here for the three years spanning this dataset's national release:
+## Composition and area against ABS
+
+Neither ABS nor ABARES is ground truth. The two agencies' national sown-area figures differ by a median of 6.8% across the three seasons and three crop groups in Table 3. No map-versus-reference difference smaller than that should be read as a map error.
+
+**Table 3.** National sown area from the two official series.
 
 | Year | Class | ABS area (ha) | ABARES area (ha) | ABS/ABARES ratio |
 |---|---|---|---|---|
@@ -168,113 +171,150 @@ The 6.8% floor itself is derived directly from ABS and ABARES's own mutual disag
 | 2024 | Cereal | 17,627,545 | 17,733,000 | 0.99 |
 | 2024 | Legume | 3,340,448 | 3,183,800 | 1.05 |
 
-Neither ABS nor ABARES is ground truth; the median disagreement between them (6.8%) is the practical precision floor this dataset's own validation is measured against throughout.
+Across the 151 well-covered SA2s, the mapped canola share of crop area tracks the ABS share (Fig. 5). The correlation is r = 0.76 and the median absolute error is 4.3 percentage points. That error is below the 6.8% disagreement between the two official series. The mapped area, however, is larger than the sown area ABS records. The median ratio of mapped crop area to ABS sown area over the same SA2s is 1.10. Earlier versions of the map called more. The ratio was 1.47 on a 3 km-tile map with no de-duplication. It was 1.31 on the 9 km map before the tile-overlap step and 1.18 after it. The final overlap merge and the 300 ha cap on merged polygons brought the ratio to 1.10.
 
-The dataset's total mapped area, however, over-calls crop-present land relative to ABS by 1.47x nationally and, independently, 1.59x in the 100 km regional companion — the same mechanism reproduced at two spatial scales.
+Table 4 divides the over-call by class. The diluted share is what a perfect classifier would report on this footprint, the ABS share divided by the over-call. The absorbed column is the excess mapped share each class carries. The excess sits in cereal and legume. Canola sits 3.7 points below its diluted share, so the map calls slightly too little land canola and too much land legume.
+
+**Table 4.** Composition against ABS, 151 SA2s, 2024. Shares are medians over SA2s.
 
 | Class | ABS share | Diluted share | Mapped share | Absorbed (points) |
 |---|---|---|---|---|
-| Canola | 19.7% | 13.4% | 13.1% | −0.3 |
-| Cereal | 67.3% | 45.8% | 69.0% | +23.2 |
-| Legume | 8.7% | 5.9% | 16.7% | +10.8 |
+| Canola | 19.2% | 17.4% | 13.7% | -3.7 |
+| Cereal | 67.3% | 61.2% | 65.8% | +4.7 |
+| Legume | 8.9% | 8.1% | 16.1% | +8.0 |
 
-`Diluted` is the share ABS would imply if the area over-call were spread proportionally across classes; `absorbed` is the excess mapped area a class actually carries beyond that. The over-call is concentrated almost entirely in Cereal and Legume and essentially absent from Canola: once divided out, canola composition matches almost exactly (13.1% mapped versus a diluted expectation of 13.4%). This pattern — canola composition matching closely, total area over-calling, and the over-call concentrated in Cereal/Legume rather than uniform — indicates the dataset's dominant source of disagreement with ABS is presence detection (calling too much land crop-present) rather than species misclassification, and this diagnosis reproduces independently at national and 100 km-regional scale with the same class signature both times. Users needing area-accurate rather than composition-accurate output can filter toward a stricter subset using the `ndvi_amp` and `abstain_reason` fields shipped on every polygon (Data Records; Usage Notes).
+The legume share, 16.1% of classified area against 8.9% in ABS, is the largest composition error in the map. An argmax-versus-mean-probability check rules out a decision-rule artefact such as a systematic tie-break (Table 5). Area-weighted over the same polygons, the share of each class by argmax and by mean predicted probability agree within 0.6 points for every class. The classifier favours legume at this rate rather than reporting it inconsistently. The confusion matrices point the same way, since canola and cereal paddocks are predicted as legume more often than the reverse. However they do not account for the size of the gap. The mechanism remains open.
 
-A distinct, unexplained discrepancy sits on top of the area over-call: Legume is mapped at 18.4% of classified area nationally versus an ABS share of 8.7%. An argmax-versus-mean-predicted-probability check, area-weighted over the same national polygons, rules out a decision-rule artefact:
+**Table 5.** Class share of classified area by decision rule, national 2024 map.
 
-| Class | Argmax share | Mean probability | ABS |
+| Class | Argmax share | Mean probability share | ABS |
 |---|---|---|---|
-| Canola | 14.0% | 14.2% | 19.7% |
-| Cereal | 67.6% | 67.1% | 67.3% |
-| Legume | 18.4% | 18.7% | 8.7% |
+| Canola | 15.4% | 15.7% | 19.2% |
+| Cereal | 66.7% | 66.1% | 67.3% |
+| Legume | 18.0% | 18.2% | 8.9% |
 
-Argmax and mean-probability shares agree closely for every class, including Legume — a gap between the two columns would indicate a decision-rule problem (for example, a systematic tie-break); agreement instead indicates the classifier genuinely, if wrongly, favours Legume at this rate. The mechanism is not established and is disclosed as an open limitation (Usage Notes).
+Table 6 re-scores the same polygons at five presence-gate thresholds. Thresholds below 0.35 cannot add polygons, because the released map was built at 0.35. Raising the threshold to 0.50 removes 26% of classified area and changes the canola share error by 0.5 points. Composition is therefore insensitive to the threshold while area is not. This is consistent with the reading that the map's main disagreement with ABS is presence rather than class.
 
-**Sensitivity of area to the presence-gate threshold.** The shipped gate uses an NDVI-amplitude threshold of 0.35; the same national polygons re-scored at five alternative thresholds show the area/composition trade-off directly, reported here as a sensitivity characterization of the released data, not as a fitting procedure against ABS (fitting the gate to minimize ABS error would make ABS a training target and destroy its value as an independent check):
+**Table 6.** Sensitivity of the 2024 map to the NDVI amplitude threshold. Share errors are medians over the 151 SA2s.
 
-| Threshold | Classified area (ha) | Canola share error (pts) | Legume share error (pts) |
+| Threshold | Classified area (ha) | Canola share error (points) | Legume share error (points) |
 |---|---|---|---|
-| 0.25 | 25,509,480 | 5.9 | 9.5 |
-| 0.30 | 25,509,480 | 5.9 | 9.5 |
-| 0.35 (shipped) | 25,509,480 | 5.9 | 9.5 |
-| 0.40 | 23,528,343 | 5.8 | 8.9 |
-| 0.45 | 21,374,494 | 5.5 | 8.8 |
-| 0.50 | 19,015,341 | 4.8 | 9.3 |
+| 0.25 | 19,575,177 | 5.7 | 9.1 |
+| 0.30 | 19,575,177 | 5.7 | 9.1 |
+| 0.35 (released) | 19,575,177 | 5.7 | 9.1 |
+| 0.40 | 18,036,667 | 5.7 | 8.8 |
+| 0.45 | 16,341,696 | 5.3 | 8.6 |
+| 0.50 | 14,462,331 | 5.2 | 8.0 |
 
-Composition error is comparatively insensitive to threshold choice across this range, while classified area is not — consistent with the diagnosis above that the dominant disagreement with ABS is presence detection rather than species discrimination: tightening the presence criterion changes how much land is called crop-present far more than it changes which crop that land is called. Fig. 5 shows the composition-versus-ABS comparison and the area-over-call decomposition together.
+## Comparison with WorldCereal and NLUM
 
-## Independent spatial corroboration: WorldCereal and NLUM
+Both products predate the 2024 map by three years, so some disagreement is real change in what was grown. Against WorldCereal's `temporarycrops` layer, the map's classified-versus-abstained presence call agrees at 76.1% of the 250,000 sampled centroids. 82.1% of abstained centroids are also no-crop in WorldCereal, and 67.9% of classified centroids are also crop. Of the 71,684 centroids the map calls cereal, 44.3% are `wintercereals` in WorldCereal. WorldCereal is an independent product rather than ground truth, so this does not establish which product is right where they differ.
 
-The national map was additionally compared, at the pixel level, against two products with no connection to this dataset's training or ABS-validation pipeline: WorldCereal 2021 v100 and NLUM v7 250 m per-commodity probability surfaces, on a stratified sample of 250,000 of the 1,346,582 national paddock centroids. Both comparisons carry a three-year reference-year mismatch (2021 versus this release's 2024) and are reported with that caveat.
+Against NLUM, the median oilseed probability at canola centroids is 8.5 times the median at abstained centroids. The cereal ratio at cereal centroids is 1.5 and the legume ratio at legume centroids is 1.0. NLUM therefore rates the map's canola and cereal polygons as more probable for those commodities than abstained land, but not its legume polygons. NLUM's grazing layer supports the presence-gate reading from an unrelated source. The median grazing probability is 60.7% at abstained centroids against 16.9% at classified centroids. Abstained land is therefore concentrated on land NLUM rates as probable grazing country.
 
-Against WorldCereal's `temporarycrops` layer, classified-versus-abstained presence agrees at 73.1% overall, symmetrically (73.0% of abstained points also called no-crop by WorldCereal; 73.2% of classified points also called crop). Against WorldCereal's `wintercereals` layer, Cereal-class agreement is markedly weaker (49.6%, n=82,411) — a real disagreement between two independent products, not sampling noise, though neither product is ground truth. NLUM's per-commodity probability surfaces, covering all three target groups directly, show a consistent enrichment pattern: median NLUM oilseed probability at Canola-classified points is 6.4 times the abstained-point median (the largest ratio in its column), and median legume probability at Legume-classified points is 1.6 times the abstained-point median (likewise the largest in its column). NLUM's grazing-probability layer independently corroborates the presence-gate mechanism: median grazing probability is 33.8% at abstained points versus 10.8% at classified points, consistent with abstained land preferentially overlapping land NLUM independently rates as probable grazing country.
+## Cereal yield
 
-## Cereal yield validation
+The cereal yield model reaches a spatial-transfer root-mean-square error of 1.21 t/ha, 30.4% of the 3.97 t/ha median trial yield (Table 7, Fig. 6). On the temporal split the year-and-state baseline collapses to a state-only model, because the test seasons are unseen. The satellite features still reach an R² of 0.47. The ABS calibration factor, fitted on 2022, reproduced the ABS implied yield within 18.1% in 2023 and 3.1% in 2024.
 
-The Cereal yield model reaches a spatial-transfer RMSE of 1.21 t/ha (30.4% of the 3.97 t/ha median observed yield).
+**Table 7.** Cereal yield model before calibration, pooled wheat, barley and oat.
 
-| Split | Arm | n | R² | RMSE (t/ha) |
+| Split | Features | n | R² | RMSE (t/ha) |
 |---|---|---|---|---|
-| Temporal (train ≤2022, test 2023-24) | Year+state baseline | 279 | −0.643 | 2.111 |
+| Temporal (train 2022 or earlier, test 2023-24) | Year and state baseline | 279 | -0.643 | 2.111 |
 | | Satellite features | 279 | 0.471 | 1.197 |
-| | Satellite + year/state | 279 | 0.486 | 1.181 |
-| Spatial (5-fold GroupKFold on site) | Year+state baseline | 1,119 | 0.294 | 1.473 |
+| | Satellite, year and state | 279 | 0.486 | 1.181 |
+| Spatial (five-fold GroupKFold on site) | Year and state baseline | 1,119 | 0.294 | 1.473 |
 | | Satellite features | 1,119 | 0.526 | 1.207 |
-| | Satellite + year/state | 1,119 | 0.577 | 1.140 |
+| | Satellite, year and state | 1,119 | 0.577 | 1.140 |
 
-The ABS calibration factor (0.6248, fit on one year of ABS data) checks to within +3.1% to +18.1% of ABS-implied yield on two held-out years. Fig. 8 shows model performance by arm and the calibration check together.
+## National multi-year maps
 
-## Multi-year regional evidence
+Table 8 summarises the nine seasons. Classified share ranged from XXX% (XXX) to XXX% (XXX). Against ABS at SA2, mapped canola composition gave r = XXX, XXX and XXX for 2022, 2023 and 2024. The area ratio was XXX, XXX and XXX. Against ABARES state totals, the median absolute error of mapped canola area was XXX% over XXX state-seasons. The median IoU between a paddock's polygons in consecutive seasons was XXX. A consensus paddock was found in a median of XXX of the nine seasons. Of consensus paddocks classified in two consecutive seasons, XXX% changed class, and canola was followed by cereal in XXX% of cases (Fig. 7). Canola is normally grown as a break crop between cereals. Note this means a high rate of repeated canola would point to classification error rather than agronomy. The 2025 season has no ABS figures and no final ABARES figures, so its map is unscored.
 
-Across the nine-year (2017-2025), 100 km regional companion product, classified share ranges from 52.5% (2018) and 59.0% (2017) up to 78.5% (2025); mean NDVI amplitude is correspondingly lowest in 2018 (0.42) and 2017 (0.46) against 0.60-0.62 in 2024-2025, attributable respectively to a documented 2018 drought and Sentinel-2B's mid-2017 operational start (reduced early-mission revisit frequency and cloud-gap robustness). Polygon geometric stability across the same nine years — independent of any spectral classification — peaks in the 25-100 ha range (the range real paddocks predominantly occupy: median found in 7 of 9 years, median IoU 0.84) and falls at both smaller and larger extremes, an independent, purely geometric corroboration of the area/compactness presence mask (Methods). Fig. 7 shows the year-by-year regional evidence; its national panel is explicitly reserved and left blank pending the national multi-year release (Data Records), not fabricated as a null result. This regional evidence is suggestive of, but does not establish, similar national multi-year behaviour; the national multi-year release is the direct test of that question and is in progress, not yet complete.
+**Table 8.** National maps by season. ABS SA2 statistics exist for 2022-2024 only.
 
-**[PENDING — national 2017-2025 multi-year run]**: national multi-year totals, per-year national coverage, and any claim that the single-national-season (2024) validation above generalizes nationally across seasons are not reported here ahead of that release.
-
----
+| Season | Classified (%) | Canola / cereal / legume share (%) | ABS canola r | Area ratio | ABARES state MAE (%) |
+|---|---:|---|---:|---:|---:|
+| 2017 | XXX | XXX / XXX / XXX | - | - | XXX |
+| 2018 | XXX | XXX / XXX / XXX | - | - | XXX |
+| 2019 | XXX | XXX / XXX / XXX | - | - | XXX |
+| 2020 | XXX | XXX / XXX / XXX | - | - | XXX |
+| 2021 | XXX | XXX / XXX / XXX | - | - | XXX |
+| 2022 | XXX | XXX / XXX / XXX | XXX | XXX | XXX |
+| 2023 | XXX | XXX / XXX / XXX | XXX | XXX | XXX |
+| 2024 | 42.5 | 15.4 / 66.6 / 17.9 | 0.76 | 1.10 | XXX |
+| 2025 | XXX | XXX / XXX / XXX | - | - | - |
 
 ---
 
 # Usage Notes
 
-**Filtering toward area-accurate rather than composition-accurate output.** Because every polygon carries either a predicted class or one of four explicit abstain reasons, plus `ndvi_amp` and classifier `confidence`, a user who needs area-accurate rather than composition-accurate output already has the information required to filter toward a tighter, more conservative view of the dataset without waiting for a future methodological revision. Raising the `ndvi_amp` threshold above the shipped 0.35 cutoff trades completeness for a lower area over-call; Technical Validation's sensitivity table quantifies this trade-off at several thresholds and should be consulted before choosing a project-specific cutoff. This design was itself informed by an earlier failure mode: an initial design considered building an explicit absence-labelled "non-crop" class from presence-only farmer-recorded grazing records, and was abandoned after finding that 78.5% of a deliberately hard stratum of grazing paddocks passed the same crop-presence test as known crop paddocks — presence-only farmer records could not be reliably inverted into confirmed absence labels. The abstain-reason and confidence fields shipped instead are this dataset's considered response: rather than force a binary crop/non-crop decision the available negative-label data could not support reliably, every polygon reports its uncertainty explicitly as a first-class field.
+Every polygon carries either a class or an abstain reason, together with `ndvi_amp`, `confidence` and the class probabilities. A user who needs area accuracy rather than composition accuracy can filter the map with these fields instead of waiting for a revised release. Raising the `ndvi_amp` threshold above 0.35 trades completeness for a lower area over-call, and Table 6 quantifies the trade-off. The strict subset (Data Records), which removes polygons flagged `no_crop_shape`, is a ready-made stricter view. The `raster_cut_m` and `class_conflict` fields identify polygons cut at a tile edge or seen differently by two tiles.
 
-**The area over-call is the single most consequential characteristic to account for.** Users computing absolute crop area from this dataset (rather than composition/share, which is comparatively well validated) should expect a 1.47-1.59x over-call relative to ABS unless they filter using the fields above; the over-call is concentrated in Cereal and Legume and essentially absent from Canola (Technical Validation), so composition estimates that rely primarily on Canola are the most directly trustworthy use of this dataset as released.
+Users computing absolute crop area should expect the map to call about 1.10 times the area ABS records as sown, unless they filter as above. The excess sits in cereal and legume rather than canola. Composition estimates that rest on canola are therefore the most directly validated use of the map.
 
-**Cereal yield: use both columns, never only the calibrated one.** `yield_tha_raw` reflects National Variety Trial management conditions, which generally out-yield commercial paddocks; `yield_tha_calibrated` applies a single national multiplicative factor to correct for this, checked against ABS-implied yield on two held-out years (+3.1% to +18.1% error) but not validated at finer spatial resolution than state level. Users needing paddock-level yield accuracy should treat the calibrated column as indicative, not exact, and consult both columns rather than the calibrated one alone.
+Cereal yield users should read both yield columns. `yield_tha` reflects trial management, which out-yields commercial paddocks, and `yield_tha_calibrated` applies a single national factor checked against ABS at state level only. The calibrated column is indicative at paddock scale, not exact. No canola or legume yield is provided. Canola yield needs Sentinel-1 backscatter to beat a year-and-state mean (Methods), and Sentinel-1 is not yet part of the pipeline.
 
-**No canola or legume yield is shipped, and canola yield's absence has a specific, addressable cause.** Canola yield requires Sentinel-1 backscatter to clear a trivial year-and-state-mean baseline (Methods); Sentinel-1 is not yet part of this dataset's production pipeline, pending a national acquisition-cost assessment. This is disclosed rather than silently omitted so that a user is not left guessing whether canola yield was attempted and failed outright, or is simply not yet built.
+The legume class is mapped at 16.1% of classified area against an ABS share of 8.9%, and the cause is not established. Users relying on the legume class should weight it accordingly against the cereal and canola classes.
 
-**The Legume-class discrepancy (18.4% mapped vs. 8.7% ABS) has no established mechanism** and should be treated as an open, disclosed limitation rather than a solved or well-understood one; users relying on Legume-class output specifically should weight it accordingly against Cereal or Canola output.
+Polygons marked `unsegmented_blob` are SAM's main failure mode, ground where several fields were returned as one shape. They carry no class and cannot be recovered from this release without a second segmentation pass. In 2024 they number 9,293 polygons covering 4.5 M ha.
 
-**`unsegmented_blob`** is SAM's single largest segmentation failure mode (48,016 polygons nationally, Data Records); these polygons carry no class prediction and are not recoverable from this release without a separate segmentation pass.
+The 2024 map can also be viewed and queried in Google Earth Engine as a public asset (XXX asset path). A viewer script is in the code repository.
 
-**Sensitive underlying ground truth.** The GRDC/NVT trial records used to build and validate this dataset cannot be released at the site level (coordinates, trial identifiers, or yields) under the data-use agreement covering them; this dataset and its accompanying validation reports contain only aggregate statistics derived from those records, never site-level values.
-
----
+The GRDC National Variety Trial records used to build and validate this dataset are covered by a data-use agreement. They cannot be released at the site level (coordinates, trial identifiers or yields). This dataset and its validation reports contain only aggregate statistics derived from those records.
 
 ---
 
 # Data Availability
-The national 2024 release and the nine-year (2017-2025) 100 km regional companion product described in Data Records will be deposited at a public repository with a persistent identifier (DOI) before submission. **[PENDING — dataset deposit not yet complete; identifier(s) to be added here once assigned — `PAPER_PLAN_SCIDATA.md` §24 point 7.]** The underlying GRDC/National Variety Trial ground-truth data used for training and validation — trial coordinates, crop identities, sowing/harvest dates, and yields — cannot be released, in accordance with the data-use agreement covering this dataset; this restriction applies only to the raw trial records and does not restrict release of the resulting map or the aggregate statistics reported in this Data Descriptor. ABS and ABARES reference statistics used for validation are already public and require no release action.
+
+The annual national maps and the consensus paddock layer described in Data Records are deposited at XXX under DOI XXX. The GRDC National Variety Trial records used for training and validation cannot be released under the data-use agreement covering them. These are the trial coordinates, crop identities, sowing and harvest dates and yields. They can be requested from the GRDC at XXX. The restriction applies to the raw trial records only, not to the released maps or the aggregate statistics reported here. ABS and ABARES statistics, the NLUM probability surfaces and WorldCereal are public. This manuscript will be provided to the GRDC for review before submission, as the data-use agreement requires.
 
 # Code Availability
 
-The pipeline code (segmentation, labelling, classification, presence gating, yield calibration, and validation scripts) contains no site-level records and will be released alongside this Data Descriptor. **[PENDING — code repository deposit not yet complete; identifier to be added here.]** The classifier (`group3_map.joblib`) and Cereal yield model (`cereal_yield.joblib`) used to produce the released data are releasable and contain no site-level records. An unused-in-production phenology-shape presence-gate model, evaluated in Methods and not adopted, is retained for reproducibility but is not part of the shipped pipeline.
+The pipeline code (segmentation, labelling, classification, abstention, yield calibration, multi-year consensus and validation scripts) contains no site-level records and is released at XXX. The classifier (`group3_map_sharma6.joblib`) and the cereal yield model (`cereal_yield.joblib`) used to produce the released data are included in the same repository.
 
 # Author Contributions
 
-[Should tidy these up to use the usual terminology for papers.]
-Christopher Bradley - Writing, coding, ideas, editing
-John Burley - Writing, coding, ideas, editing 
-Yasar Adeel Ansari - Writing, coding, ideas, editing
-Justin Borevitz - funding acquisition, editing
+C.B.: conceptualisation, methodology, software, formal analysis, data curation, visualisation, writing (original draft), writing (review and editing). J.B.: conceptualisation, software, writing (original draft), writing (review and editing). Y.A.A.: conceptualisation, software, writing (original draft), writing (review and editing). J.O.B.: funding acquisition, supervision, writing (review and editing).
 
 # Competing Interests
 
-None
+The authors declare no competing interests.
 
 # Acknowledgements
 
-We would like to acknowledge the Grains Research and Development Corporation and the National Variety Trials network for the underlying trial data, and the National Computational Infrastructure (NCI) for compute access via Digital Earth Australia.
+We thank the Grains Research and Development Corporation and the National Variety Trials network for the trial data. We thank the National Computational Infrastructure for compute access and the Digital Earth Australia datacube.
 
-[Should also acknowledge claude usage and NORA usage (and reference NORA)]
+---
+
+# References
+
+ABARES (2024). Land use of Australia 2010-11 to 2020-21: agricultural commodity probability surfaces, version 7 (NLUM v7, 250 m). Australian Bureau of Agricultural and Resource Economics and Sciences, Canberra. XXX
+
+Al-Shammari, D., Fuentes, I., Whelan, B.M., Wang, C., Filippi, P. and Bishop, T.F.A. (2024). Combining Sentinel 1, Sentinel 2 and MODIS data for major winter crop type classification over the Murray Darling Basin in Australia. *Remote Sensing Applications: Society and Environment*, 34, 101200. doi:10.1016/j.rsase.2024.101200
+
+GRDC (XXXX). National Variety Trials protocols. Grains Research and Development Corporation. XXX
+
+Kerner, H., Chaudhari, S., Ghosh, A., Robinson, C., Ahmad, A., Choi, E., Joshi, N., Tadros, M., Malkin, N. and Ortiz, C. (2024). Fields of The World: a machine learning benchmark dataset for global agricultural field boundary segmentation. arXiv:2409.16252.
+
+Kirillov, A., Mintun, E., Ravi, N., Mao, H., Rolland, C., Gustafson, L., Xiao, T., Whitehead, S., Berg, A.C., Lo, W.-Y., Dollár, P. and Girshick, R. (2023). Segment Anything. In *2023 IEEE/CVF International Conference on Computer Vision (ICCV)*, 3992-4003.
+
+Newman, S.J. and Furbank, R.T. (2021). Explainable machine learning models of major crop traits from satellite-monitored continent-wide field trial data. *Nature Plants*, 7, 1354-1363.
+
+Olofsson, P., Foody, G.M., Herold, M., Stehman, S.V., Woodcock, C.E. and Wulder, M.A. (2014). Good practices for estimating area and assessing accuracy of land change. *Remote Sensing of Environment*, 148, 42-57. doi:10.1016/j.rse.2014.02.015
+
+PaddockTS (XXXX). XXX
+
+Pedregosa, F., Varoquaux, G., Gramfort, A., Michel, V., Thirion, B., Grisel, O., Blondel, M., Prettenhofer, P., Weiss, R., Dubourg, V., Vanderplas, J., Passos, A., Cournapeau, D., Brucher, M., Perrot, M. and Duchesnay, É. (2011). Scikit-learn: machine learning in Python. *Journal of Machine Learning Research*, 12, 2825-2830.
+
+Sharma, S., Eslick, H., Pires, R., Singh, B. and Tareque, H. (2026). Temporal sensitivity of in-season crop classification: an explainable multi-year Sentinel-2 analysis in Western Australia. *Remote Sensing*, 18(10), 1653. doi:10.3390/rs18101653
+
+Sulik, J.J. and Long, D.S. (2016). Spectral considerations for modeling yield of canola. *Remote Sensing of Environment*, 184, 161-174. XXX
+
+Tian, H., Chen, T., Li, Q., Mei, Q., Wang, S., Yang, M., Wang, Y. and Qin, Y. (2022). A novel spectral index for automatic canola mapping by using Sentinel-2 imagery. *Remote Sensing*, 14(5), 1113. XXX
+
+Tseng, G., Cartuyvels, R., Zvonkov, I., Purohit, M., Rolnick, D. and Kerner, H. (2024). Lightweight, pre-trained transformers for remote sensing timeseries. arXiv:2304.14065.
+
+Van Tricht, K., Degerickx, J., Gilliams, S., Zanaga, D., Battude, M., Grosu, A., Brombacher, J., Lesiv, M., Bayas, J.C.L., Karanam, S., Fritz, S., Becker-Reshef, I., Franch, B., Mollà-Bononad, B., Boogaard, H., Pratihast, A.K., Koetz, B. and Szantoi, Z. (2023). WorldCereal: a dynamic open-source system for global-scale, seasonal, and reproducible crop and irrigation mapping. *Earth System Science Data*, 15, 5491-5515. doi:10.5194/essd-15-5491-2023
+
+Wu, Q. and Osco, L.P. (2023). samgeo: a Python package for segmenting geospatial data with the Segment Anything Model (SAM). *Journal of Open Source Software*, 8(89), 5663. XXX
