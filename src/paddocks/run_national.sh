@@ -34,7 +34,8 @@
 #   ./run_national.sh merge        # one national GeoPackage (refuses if chunks are incomplete)
 #   ./run_national.sh boundary     # de-duplicate the ~350 m tile-overlap band in the merged file
 #                                 #   -> national_${YEAR}_crops_merged.gpkg (TILE_BOUNDARY_MERGE.md)
-#   ./run_national.sh classified   # _classified (every predicted class) and _good (strict mask) files
+#   ./run_national.sh overlaps     # merge polygons that still overlap -> national_${YEAR}_crops_final.gpkg
+#   ./run_national.sh classified   # _final_classified (every predicted class) and _final_good (strict mask)
 #   ./run_national.sh summary      # per-category polygon count/area for this year, from pred/*.gpkg
 #   ./run_national.sh cost         # SUs billed so far, by stage
 #
@@ -381,8 +382,17 @@ boundary)
     [ -f "$IN" ] || { echo "no merged file at $IN — run '$0 merge' first" >&2; exit 1; }
     qsub -v M=$M,YEAR=$YEAR boundary_national.pbs
     ;;
+overlaps)
+    # Merge every polygon group that still overlaps after `boundary` (merge_overlaps.py): a chain of
+    # overlaps becomes one polygon with the attributes (crop type, yield, ...) of its largest member.
+    # User decision 2026-09-11, after 165,081 pairs (2.75 M ha, nearly all one paddock seen by two
+    # tiles) survived `boundary` on the 2024 9 km map. -> national_${YEAR}_crops_final.gpkg
+    IN=$M/national_${YEAR}_crops_merged.gpkg
+    [ -f "$IN" ] || { echo "no boundary-merged file at $IN - run '$0 boundary' first" >&2; exit 1; }
+    qsub -v M=$M,YEAR=$YEAR overlaps_national.pbs
+    ;;
 classified)
-    # Two products from the boundary-merged file, both with `pred` renamed `predicted_crop_type` and
+    # Two products from the final (overlap-merged) file, both with `pred` renamed `predicted_crop_type` and
     # the QGIS style of the 2024 release copied in so they open coloured.
     #   _classified.gpkg  every polygon with a predicted class, the equivalent of the retired 3 km
     #                     release (650,766 of 1,346,582). It includes polygons that failed the
@@ -392,12 +402,12 @@ classified)
     #                     2026-09-07 (2a)).
     #   _good.gpkg        the strict mask: a predicted class AND every gate passed (abstain_reason empty).
     # raster_cut_m and class_conflict stay as columns for a further, optional mask.
-    IN=$M/national_${YEAR}_crops_merged.gpkg
+    IN=$M/national_${YEAR}_crops_final.gpkg
     STYLE=${STYLE:-$D/national2024/national_2024_crops_classified.gpkg}
     OGR=/apps/gdal/3.7.3/bin
-    [ -s "$IN" ] || { echo "no boundary-merged file at $IN - run '$0 boundary' first" >&2; exit 1; }
+    [ -s "$IN" ] || { echo "no final file at $IN - run '$0 overlaps' first" >&2; exit 1; }
     for kind in classified good; do
-        OUTC=$M/national_${YEAR}_crops_merged_${kind}.gpkg
+        OUTC=$M/national_${YEAR}_crops_final_${kind}.gpkg
         if [ "$kind" = classified ]; then W="pred IS NOT NULL AND pred <> ''"; else W="abstain_reason = '' OR abstain_reason IS NULL"; fi
         rm -f "$OUTC"
         $OGR/ogr2ogr -f GPKG "$OUTC" "$IN" crops -nln crops -where "$W"
@@ -410,7 +420,7 @@ print(f"{sys.argv[1].rsplit('/', 1)[1]}: {c.execute('SELECT COUNT(*) FROM crops'
 PYEOF
         if [ -s "$STYLE" ]; then $OGR/ogr2ogr -update -append "$OUTC" "$STYLE" layer_styles; else echo "no style source at $STYLE; left unstyled"; fi
     done
-    ls -la $M/national_${YEAR}_crops_merged_classified.gpkg $M/national_${YEAR}_crops_merged_good.gpkg
+    ls -la $M/national_${YEAR}_crops_final_classified.gpkg $M/national_${YEAR}_crops_final_good.gpkg
     ;;
 summary)
     # Per-category polygon count and area, for comparing one year against another (and against

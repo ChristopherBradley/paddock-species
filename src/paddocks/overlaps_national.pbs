@@ -1,0 +1,35 @@
+#!/bin/bash
+#PBS -N overlaps_n
+#PBS -P xe2
+#PBS -q normalbw
+#PBS -l ncpus=4
+#PBS -l mem=32GB
+#PBS -l walltime=03:00:00
+#PBS -l storage=gdata/xe2+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+
+# The last national stage, after boundary_national.pbs: merge every polygon group that still
+# overlaps (merge_overlaps.py) into one polygon carrying its largest member's attributes.
+# -> national_${YEAR}_crops_final.gpkg. One job per year; the input is never modified.
+#
+# SIZING. boundary_national.pbs peaked at 20.8 GB on the same 1.16 M polygons (2024, 9 km). This
+# job holds every geometry plus the candidate-pair arrays, so 32 GB. On normalbw that memory bills
+# as 4 cores, so ask for the 4.
+
+set -euo pipefail
+# numpy hints MADV_HUGEPAGE on every large array and gadi runs THP defrag=madvise (synchronous
+# compaction on those faults, node-dependent stalls; PROJ_NOTES 2026-09-09).
+export NUMPY_MADVISE_HUGEPAGE=0
+: "${M:?set -v M=}"
+: "${YEAR:?set -v YEAR=}"
+PY=/g/data/xe2/John/geospatenv/bin/python
+IN=$M/national_${YEAR}_crops_merged.gpkg
+OUT=$M/national_${YEAR}_crops_final.gpkg
+[ -f "$IN" ] || { echo "no boundary-merged file at $IN" >&2; exit 1; }
+rm -f "$OUT"
+cd /home/147/cb8590/Projects/paddock-species/src/paddocks
+$PY merge_overlaps.py --in "$IN" --out "$OUT" --summary "$M/overlaps_summary.json" --verify
+ls -la "$OUT"
+echo "Done overlaps"

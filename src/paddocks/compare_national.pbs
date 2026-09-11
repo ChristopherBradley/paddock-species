@@ -11,7 +11,7 @@
 #PBS -e /scratch/xe2/cb8590/paddock-species-logs/
 
 # Every comparison of one finished national year that does not need the ABS job's 32 GB sjoin,
-# run after `boundary`. Aggregate outputs go to output/, anything site-level stays in $M/compare/
+# run after `overlaps`. Aggregate outputs go to output/, anything site-level stays in $M/compare/
 # under a *_SENSITIVE name.
 #   1. paddock centroids of the de-duplicated map -> WorldCereal and NLUM point comparisons
 #   2. trial-site retention (does a 2024 trial sit inside a retained polygon; geometry only --
@@ -32,7 +32,7 @@ PYT=/g/data/xe2/cb8590/miniconda/envs/shelterbelts/bin/python   # has tabulate, 
 REPO=/home/147/cb8590/Projects/paddock-species
 D=/scratch/xe2/cb8590/paddock-species-data/derived
 cd $REPO/src/paddocks
-MERGED=$M/national_${YEAR}_crops_merged.gpkg
+MERGED=${FINAL:-$M/national_${YEAR}_crops_final.gpkg}   # after `overlaps`
 PRE=$M/national_${YEAR}_crops.gpkg
 OLD=${OLD:-$D/national${YEAR}/national_${YEAR}_crops.gpkg}
 TAG=${TAG:-${YEAR}_9km}
