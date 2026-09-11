@@ -15,8 +15,10 @@ left alone. Chains (A overlaps B, B overlaps C) merge as one group. The group's 
 attribute of the member with the largest area: crop type, abstain_reason, confidence,
 probabilities and yield. area_ha and compactness (P/sqrt(A), as in merge_tile_boundaries.py) are
 recomputed from the union. overlap_merge_n (group size) and overlap_merged_from (the input fids
-folded into this row) record the provenance. No size cap is applied: a union over 300 ha is kept
-and counted in the summary.
+folded into this row) record the provenance. A merged polygon over --max-area-ha (300 ha) is then
+abstained as `unsegmented_blob`, the reason predict_tile.py gives a single polygon over the same limit:
+its class and yield are cleared and that reason replaces any other, since the pipeline checks area
+before any spectral gate (user decision 2026-09-11).
 
 A union that comes out as a MultiPolygon cannot go into this POLYGON layer. It keeps its largest
 part when that part holds at least 99% of the union's area; otherwise the group is left unmerged
@@ -81,6 +83,8 @@ def main():
     ap.add_argument("--min-overlap-m2", type=float, default=100.0,
                     help="intersection area above which two polygons count as overlapping (100 = 1 pixel)")
     ap.add_argument("--summary", help="JSON summary")
+    ap.add_argument("--max-area-ha", type=float, default=300.0,
+                    help="abstain a merged polygon larger than this as unsegmented_blob (predict_tile.py --max-area-ha); 0 disables")
     ap.add_argument("--verify", action="store_true", help="re-scan the output and count residual overlaps")
     args = ap.parse_args()
 
@@ -103,6 +107,7 @@ def main():
     stats = Counter()
     hist = Counter()
     union_ha, member_ha, over300 = 0.0, 0.0, 0
+    big, big_was_cls = [], 0
     for g in groups:
         w = g[np.argmax(area[g])]
         u = shapely.union_all(G[g])
@@ -129,6 +134,9 @@ def main():
         union_ha += ua / 1e4
         member_ha += area[g].sum() / 1e4
         over300 += ua / 1e4 > 300
+        if args.max_area_ha and ua / 1e4 > args.max_area_ha:
+            big.append(int(fid[w]))
+            big_was_cls += cls[w] is not None
         folded = ",".join(str(int(fid[m])) for m in g if m != w)
         upd.append((geom_to_blob(u, srs_id), round(ua / 1e4, 2), float(u.length / np.sqrt(ua)),
                     int(len(g)), folded, int(fid[w])))
@@ -146,6 +154,11 @@ def main():
     con.executemany(f'UPDATE "{args.layer}" SET geom=?, area_ha=?, compactness=?, overlap_merge_n=?, '
                     f'overlap_merged_from=? WHERE fid=?', upd)
     con.executemany(f'DELETE FROM "{args.layer}" WHERE fid=?', [(f,) for f in dele])
+    if big:
+        sets = ["pred=NULL", "abstain_reason='unsegmented_blob'"] + [f"{c}=NULL" for c in ("yield_tha", "yield_tha_calibrated") if c in cols]
+        con.executemany(f'UPDATE "{args.layer}" SET {", ".join(sets)} WHERE fid=?', [(f,) for f in big])
+        log(f"{len(big):,} merged polygons over {args.max_area_ha:g} ha abstained as unsegmented_blob "
+            f"({big_was_cls:,} had a class)")
     ext = con.execute(f"SELECT min(minx), min(miny), max(maxx), max(maxy) FROM rtree_{args.layer}_geom").fetchone()
     if ext and ext[0] is not None:
         con.execute("UPDATE gpkg_contents SET min_x=?, min_y=?, max_x=?, max_y=? WHERE table_name=?", (*ext, args.layer))
@@ -161,7 +174,9 @@ def main():
              n_candidate_pairs=n_cand, n_overlap_pairs=int(len(i)), overlap_ha=round(float(inter.sum() / 1e4), 1),
              n_groups_merged=len(upd), n_rows_folded=len(dele), group_size_hist={str(k): v for k, v in sorted(hist.items())},
              group_types=dict(stats), union_ha=round(union_ha, 1), member_ha=round(member_ha, 1),
-             double_counted_ha_removed=round(member_ha - union_ha, 1), n_unions_over_300ha=int(over300))
+             double_counted_ha_removed=round(member_ha - union_ha, 1), n_unions_over_300ha=int(over300),
+             max_area_ha=args.max_area_ha, n_merged_over_max_area_abstained=len(big),
+             n_merged_over_max_area_were_classified=int(big_was_cls))
     if args.verify:
         _, fid2, G2, _ = read_layer(args.out, args.layer)
         _, i2, _, inter2 = overlap_pairs(G2, args.min_overlap_m2)

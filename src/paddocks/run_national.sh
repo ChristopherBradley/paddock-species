@@ -386,7 +386,8 @@ overlaps)
     # Merge every polygon group that still overlaps after `boundary` (merge_overlaps.py): a chain of
     # overlaps becomes one polygon with the attributes (crop type, yield, ...) of its largest member.
     # User decision 2026-09-11, after 165,081 pairs (2.75 M ha, nearly all one paddock seen by two
-    # tiles) survived `boundary` on the 2024 9 km map. -> national_${YEAR}_crops_final.gpkg
+    # tiles) survived `boundary` on the 2024 9 km map. A merged polygon over 300 ha is then abstained as
+    # unsegmented_blob, as predict_tile.py does for a single one. -> national_${YEAR}_crops_final.gpkg
     IN=$M/national_${YEAR}_crops_merged.gpkg
     [ -f "$IN" ] || { echo "no boundary-merged file at $IN - run '$0 boundary' first" >&2; exit 1; }
     qsub -v M=$M,YEAR=$YEAR overlaps_national.pbs
