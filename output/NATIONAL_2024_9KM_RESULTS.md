@@ -9,7 +9,10 @@ retention table stays in `$M/compare/sites_2024_9km_SENSITIVE.csv`.
 
 | file | contents |
 |---|---|
-| `$M/national_2024_crops_merged.gpkg` | **The final map.** De-duplicated across tile overlaps. 1,158,824 polygons, layer `crops`, EPSG:3577, 3.1 GB |
+| `$M/national_2024_crops_final.gpkg` | **The final map** (2026-09-11). Every polygon group that still overlapped after the boundary step merged into one, carrying its largest member's attributes. 1,010,627 polygons |
+| `$M/national_2024_crops_final_classified.gpkg` | Every polygon with a predicted class, from the final map: 430,434 |
+| `$M/national_2024_crops_final_good.gpkg` | **Good polygons** from the final map, strict mask: 344,868 |
+| `$M/national_2024_crops_merged.gpkg` | After the boundary step, before the overlap merge: 1,158,824 polygons. Sections 1-5 below were computed on this file |
 | `$M/national_2024_crops_merged_classified.gpkg` | Every polygon with a predicted class: 462,028. Includes the 105,627 flagged `no_crop_shape`. `pred` renamed `predicted_crop_type`, QGIS style embedded |
 | `$M/national_2024_crops_merged_good.gpkg` | **Good polygons**, the strict mask: a class and every gate passed (`abstain_reason` empty). 356,401 |
 | `$M/national_2024_crops.gpkg` | Before de-duplication: 1,238,529 polygons |
@@ -118,3 +121,13 @@ Legume enrichment fell below 1 (`NLUM_COMPARISON_2024_9km.md`).
 - The manuscript's [CHECK] markers flag four claims the re-run changed: canola "near-exact" after
   dilution, "same over-call magnitude" nationally and regionally, WorldCereal symmetry, and legume
   NLUM enrichment.
+
+## 7. Final overlap merge (2026-09-11)
+
+`run_national.sh overlaps` (merge_overlaps.py) merged every chain of polygons still overlapping by more than 100 m² after the boundary step. The merged polygon carries the attributes of its largest member.
+
+- 165,071 overlapping pairs (2.75 M ha of overlap) formed 122,185 groups, and 148,197 rows were folded in. Afterwards no overlaps are left.
+- 2.53 M ha of double-counted polygon area was removed.
+- Group types: 80,960 all abstained, 16,135 same class, 3,515 class conflicts (largest wins), 16,962 mixed with a classified winner, and 4,613 mixed with an abstained winner. In those 4,613 a smaller classified view was absorbed.
+- 4,872 merged polygons exceed 300 ha, since no size cap is applied.
+- The classified count went from 462,028 to 430,434 and the good polygons from 356,401 to 344,868.
