@@ -1,0 +1,86 @@
+#!/bin/bash
+#PBS -N rf9_legspecies
+#PBS -P xe2
+#PBS -q normal
+#PBS -l ncpus=12
+#PBS -l mem=32GB
+#PBS -l walltime=01:00:00
+#PBS -l storage=gdata/xe2+scratch/xe2
+#PBS -l wd
+#PBS -o /scratch/xe2/cb8590/paddock-species-logs/
+#PBS -e /scratch/xe2/cb8590/paddock-species-logs/
+
+# Two user questions from the 2026-09-12 manuscript review, both on the ADOPTED nine-index
+# feature set (153 features, same rows and splits as GROUP3_MODEL_shipped_plus_sharma6.md):
+#
+#   1. "Can we retry the random forest using the 9 indices? If it's more than 1% better, then we
+#      should probably use that instead." The RF / ET alternatives in the manuscript were only
+#      ever scored on the three-index (51-feature) set, where they matched the booster
+#      (0.830/0.820 RF vs 0.821/0.823 HGB). Steps 1 and 2 score them on the nine indices.
+#
+#   2. "How good were the classifications at resolving different legumes at the species level?"
+#      The only species-level numbers (LABEL_QUALITY.md) are from the old three-index model on a
+#      54-trial legume test set. Step 3 reruns the nine-species target on the adopted features.
+#      Step 4 is the upper bound: a legume-only five-species model, i.e. "given we already know
+#      it is a legume, which one?" The legume keep files are keep_reviewed / testkeep_temporal
+#      filtered to crop_group == Legume (490 train+test rows, 109 test).
+#
+# Every step is the same train_species.py invocation as the adopted arm except --model / --target
+# / --keep, so the only thing that differs from the adopted report is the thing being tested.
+set -euo pipefail
+export PROJ_NETWORK=OFF
+export NUMPY_MADVISE_HUGEPAGE=0
+export OMP_NUM_THREADS=1
+PY=/g/data/xe2/John/geospatenv/bin/python
+D=/scratch/xe2/cb8590/paddock-species-data/derived
+REPO=/home/147/cb8590/Projects/paddock-species
+cd $REPO/src/paddocks
+
+FEATS="--indices $D/samgeo/ts_v2/*_SENSITIVE.csv --bands $D/samgeo/bands_ts/*_SENSITIVE.csv --bands-keep-families ndre2 vi2 vi3 vdvi vci evi2_sharma"
+LAB="--labeled $D/nvt_trials_labeled.csv"
+
+# 1. random forest, group3, nine indices
+$PY train_species.py \
+    --indices "$D/samgeo/ts_v2/*_SENSITIVE.csv" \
+    --bands "$D/samgeo/bands_ts/*_SENSITIVE.csv" \
+    --bands-keep-families ndre2 vi2 vi3 vdvi vci evi2_sharma \
+    $LAB --keep $D/keep_arms/keep_reviewed_SENSITIVE.csv \
+    --test-keep $D/keep_arms/testkeep_temporal_SENSITIVE.csv \
+    --target group3 --model rf --importance-repeats 0 \
+    --out $REPO/output/GROUP3_MODEL_rf_9index.md
+
+# 2. extra trees, group3, nine indices
+$PY train_species.py \
+    --indices "$D/samgeo/ts_v2/*_SENSITIVE.csv" \
+    --bands "$D/samgeo/bands_ts/*_SENSITIVE.csv" \
+    --bands-keep-families ndre2 vi2 vi3 vdvi vci evi2_sharma \
+    $LAB --keep $D/keep_arms/keep_reviewed_SENSITIVE.csv \
+    --test-keep $D/keep_arms/testkeep_temporal_SENSITIVE.csv \
+    --target group3 --model et --importance-repeats 0 \
+    --out $REPO/output/GROUP3_MODEL_et_9index.md
+
+# 3. nine species, booster, nine indices, same rows as the adopted arm
+$PY train_species.py \
+    --indices "$D/samgeo/ts_v2/*_SENSITIVE.csv" \
+    --bands "$D/samgeo/bands_ts/*_SENSITIVE.csv" \
+    --bands-keep-families ndre2 vi2 vi3 vdvi vci evi2_sharma \
+    $LAB --keep $D/keep_arms/keep_reviewed_SENSITIVE.csv \
+    --test-keep $D/keep_arms/testkeep_temporal_SENSITIVE.csv \
+    --target species --model hgb --importance-repeats 0 \
+    --confusion-png $REPO/output/figures/confusion_species9_9index_temporal.png \
+    --spatial-confusion-png $REPO/output/figures/confusion_species9_9index_spatial.png \
+    --out $REPO/output/SPECIES_MODEL_9index.md
+
+# 4. legume-only five species, booster, nine indices
+$PY train_species.py \
+    --indices "$D/samgeo/ts_v2/*_SENSITIVE.csv" \
+    --bands "$D/samgeo/bands_ts/*_SENSITIVE.csv" \
+    --bands-keep-families ndre2 vi2 vi3 vdvi vci evi2_sharma \
+    $LAB --keep $D/keep_arms/keep_reviewed_legume_SENSITIVE.csv \
+    --test-keep $D/keep_arms/testkeep_temporal_legume_SENSITIVE.csv \
+    --target species --model hgb --importance-repeats 0 \
+    --confusion-png $REPO/output/figures/confusion_legume5_9index_temporal.png \
+    --spatial-confusion-png $REPO/output/figures/confusion_legume5_9index_spatial.png \
+    --out $REPO/output/LEGUME_SPECIES_MODEL_9index.md
+
+echo "Done train_rf_9index_legume_species"

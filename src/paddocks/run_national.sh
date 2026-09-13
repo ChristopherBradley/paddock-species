@@ -78,9 +78,23 @@ SAM_EXTRA=${SAM_EXTRA---prompt-image-only}
 PRESEG_EXTRA=${PRESEG_EXTRA-}
 # Predict model + gates, used by `sampredict`.
 MODEL=${MODEL:-$D/models/group3_map_sharma6.joblib}
-PREDICT_ARGS="--max-area-ha 300 --crop-gate-amp 0.35 --crop-gate-shape $D/models/phenology_gate.joblib --shape-gate-skip-classes Canola Cereal Legume --yield-model $D/models/cereal_yield.joblib"
+# PREDICT_EXTRA appends to every predict invocation. The multi-year 9 km run passes --no-zarr
+# through it: the per-batch .zarr time-series store is ~124 files per batch, ~346,000 files per
+# national year, and the xe2 scratch INODE quota (not its terabytes) had only ~749,000 free when
+# the eight-year run was planned -- so keeping the zarrs would have run the project out of inodes
+# during the second year. The .gpkg predictions are unaffected; a zarr can be rebuilt for any year
+# by re-running predict over that year's composites, which are kept.
+PREDICT_EXTRA=${PREDICT_EXTRA:-}
+PREDICT_ARGS="--max-area-ha 300 --crop-gate-amp 0.35 --crop-gate-shape $D/models/phenology_gate.joblib --shape-gate-skip-classes Canola Cereal Legume --yield-model $D/models/cereal_yield.joblib $PREDICT_EXTRA"
 PER_SAM=${PER_SAM:-8}          # presegment chunks per SAM job -> 40 GPU jobs
 LANES=${LANES:-64}             # max presegment/predict jobs running at once (datacube pooler)
+# JOBPFX: prefix for every PBS job name this run submits, AND for the live-job guards that read
+# those names back out of qstat. Empty reproduces the single-year behaviour exactly. It exists
+# because the multi-year 9 km orchestrator runs several years at once and the guards below match
+# job names, not directories: without a prefix, year A's live `ps_p000` makes year B believe its
+# own p000 is already in flight, so B's chunk is skipped on every pass and quietly never runs.
+# Keep it short -- PBS truncates job names at 15 characters (e.g. JOBPFX=y23_ -> y23_ps_p000).
+JOBPFX=${JOBPFX:-}
 
 case "${1:-}" in
 grid)
@@ -96,11 +110,21 @@ import sys, pandas as pd
 base, year, out = sys.argv[1], int(sys.argv[2]), sys.argv[3]
 A = pd.read_csv(base)
 before = A["year"].iat[0]
-# Only the year-dependent columns move. stub embeds the base year once (nlum_<year>_r..._c...)
-# — replace that exact substring rather than doing a blind global year-string replace, so a
-# coincidental "2024" inside lat/lon (there is none at 6dp here, but never rely on that) can
-# never be touched.
-A["stub"] = A["stub"].str.replace(f"nlum_{before}_", f"nlum_{year}_", regex=False)
+# Only the year-dependent columns move. stub embeds the base year once, right after the grid
+# prefix: nlum_<year>_r..._c... at 3 km and nlum9_<year>_r..._c... at 9 km. Anchor the rewrite to
+# that prefix rather than doing a blind global year-string replace, so a coincidental "2024"
+# inside lat/lon (there is none at 6dp here, but never rely on that) can never be touched.
+#
+# THE PREFIX IS NOT ALWAYS "nlum_". It was, until the 9 km grid arrived calling its tiles
+# nlum9_2024_r63_c371: a literal f"nlum_{before}_" matches nothing in those, so `grid` silently
+# copied 2024's stubs verbatim into every other year and each year's polygons would have carried
+# a stub naming the wrong year. Match the prefix as a group instead and assert every row moved.
+pat = rf"^(nlum\d*)_{before}_"
+moved = A["stub"].str.match(rf"nlum\d*_{before}_")
+if not moved.all():
+    raise SystemExit(f"grid: {(~moved).sum()} of {len(A)} stubs do not start with nlum*_{before}_ "
+                     f"(first: {A.loc[~moved, 'stub'].iat[0]}) — refusing to relabel blind")
+A["stub"] = A["stub"].str.replace(pat, rf"\1_{year}_", regex=True)
 A["year"] = year
 A["start"] = f"{year}-01-01"
 A["end"] = f"{year}-12-31"
@@ -196,7 +220,7 @@ PYEOF
     for f in $CH/p*.csv; do
         b=$(basename "$f" .csv)
         if grep -qx "$b" "$DONE"; then skipped=$((skipped + 1)); continue; fi
-        grep -qx "ps_$b" "$LIVE_NAMES" && { skipped=$((skipped + 1)); continue; }
+        grep -qx "${JOBPFX}ps_$b" "$LIVE_NAMES" && { skipped=$((skipped + 1)); continue; }
         if [ $room -le 0 ]; then
             echo "STOPPING at $b — $(ls $CH/p*.csv | wc -l) chunks wanted, $i submitted."
             echo "Re-run '$0 presegment' when the queue drains; it resumes where this left off."
@@ -208,7 +232,7 @@ PYEOF
         # PS_MEM / PS_WALLTIME: 3 km chunks fit 4 GB / 3 h; 9 km chunks (NCHUNK=60, ~266 tiles at
         # ~77 s each, PILOT_9KM_COST.md) need PS_WALLTIME=10:00:00 (billed on use, not request).
         JID=$(qsub $DEP -l mem=${PS_MEM:-4GB} -l walltime=${PS_WALLTIME:-03:00:00} \
-                   -v "AOIS=$f,OUTDIR=$POLY,PRESEG_EXTRA=$PRESEG_EXTRA" -N ps_$b presegment.pbs)
+                   -v "AOIS=$f,OUTDIR=$POLY,PRESEG_EXTRA=$PRESEG_EXTRA" -N ${JOBPFX}ps_$b presegment.pbs)
         PREV[$lane]=${JID%%.*}
         echo "$b ${JID%%.*}" >> $M/chunkjobs.txt
         i=$((i + 1)); room=$((room - 1))
@@ -262,7 +286,7 @@ print(sum(s not in done for s in stubs), sum(not os.path.exists(f"{poly}/{s}.tif
 PYEOF
 )"
         if [ "$left" -eq 0 ]; then ndone=$((ndone + 1)); i=$((i + PER_SAM)); k=$((k + 1)); continue; fi
-        if grep -qx "sp_s$k" "$LIVE_NAMES"; then nlive=$((nlive + 1)); i=$((i + PER_SAM)); k=$((k + 1)); continue; fi
+        if grep -qx "${JOBPFX}sp_s$k" "$LIVE_NAMES"; then nlive=$((nlive + 1)); i=$((i + PER_SAM)); k=$((k + 1)); continue; fi
         if [ -n "${SP_NODEP:-}" ]; then
             if [ "$missing" -gt 0 ]; then nwait=$((nwait + 1)); i=$((i + PER_SAM)); k=$((k + 1)); continue; fi
             DEP=""
@@ -277,7 +301,7 @@ PYEOF
         fi
         JID=$(qsub $DEP -l walltime=${SP_WALLTIME:-06:00:00} \
               -v "AOIS=$M/sam/s$k.csv,OUTDIR=$POLY,PREDDIR=$M/pred/sp$k,MODEL=$MODEL,WORKERS=${WORKERS:-11},SAM_EXTRA=$SAM_EXTRA,EXTRA_ARGS=$PREDICT_ARGS" \
-              -N sp_s$k sampredict.pbs)
+              -N ${JOBPFX}sp_s$k sampredict.pbs)
         for b in $part; do echo "$b ${JID%%.*}" >> $M/sam/jobmap.txt; done
         echo "sp_s$k ${JID%%.*} $(date +%FT%T) left=$left" >> $M/sam/spjobs.txt
         nsub=$((nsub + 1)); room=$((room - 1))
@@ -367,7 +391,7 @@ PYEOF
         [ -f "$f" ] || continue
         b=$(basename "$f" .gpkg); ln -sf "$f" "$M/pred/p_$(basename "$(dirname "$f")")_${b#p_}.gpkg"
     done
-    qsub -v M=$M,YEAR=$YEAR merge_national.pbs
+    qsub -N ${JOBPFX}merge_nat -v M=$M,YEAR=$YEAR merge_national.pbs
     ;;
 boundary)
     # Post-hoc cross-tile de-duplication of the merged national file. Adjacent tiles' rasters
@@ -380,7 +404,7 @@ boundary)
     # and the Riverina evidence: output/TILE_BOUNDARY_MERGE.md.
     IN=$M/national_${YEAR}_crops.gpkg
     [ -f "$IN" ] || { echo "no merged file at $IN — run '$0 merge' first" >&2; exit 1; }
-    qsub -v M=$M,YEAR=$YEAR boundary_national.pbs
+    qsub -N ${JOBPFX}boundary_n -v M=$M,YEAR=$YEAR boundary_national.pbs
     ;;
 overlaps)
     # Merge every polygon group that still overlaps after `boundary` (merge_overlaps.py): a chain of
@@ -390,7 +414,7 @@ overlaps)
     # unsegmented_blob, as predict_tile.py does for a single one. -> national_${YEAR}_crops_final.gpkg
     IN=$M/national_${YEAR}_crops_merged.gpkg
     [ -f "$IN" ] || { echo "no boundary-merged file at $IN - run '$0 boundary' first" >&2; exit 1; }
-    qsub -v M=$M,YEAR=$YEAR overlaps_national.pbs
+    qsub -N ${JOBPFX}overlaps_n -v M=$M,YEAR=$YEAR overlaps_national.pbs
     ;;
 classified)
     # Two products from the final (overlap-merged) file, both with `pred` renamed `predicted_crop_type` and

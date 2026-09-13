@@ -1,6 +1,6 @@
 # Draft README, paddock-species Scientific Data manuscript
 
-**Updated**: 2026-09-11. **Target venue**: Nature Scientific Data (backup ESSD). **Manuscript type**: Data Descriptor.
+**Updated**: 2026-09-12. **Target venue**: Nature Scientific Data (backup ESSD). **Manuscript type**: Data Descriptor.
 
 ## Single source of truth
 
@@ -13,12 +13,12 @@ submission packages. All of it is in git history if it is ever wanted back.
 
 - Every 2024 national number is from the final 2024 map (`national_2024_crops_final.gpkg`, 1,010,627 polygons) and the adopted nine-index classifier (macro F1 0.890 / 0.892).
 - `XXX` marks a value still pending: the 2017-2023 and 2025 national runs, the consensus layer, the dataset DOI, the code repository, the GRDC request form and a few citations. `COMMENT_RESPONSES.md` lists them.
-- The user's bracketed comments have been addressed in two rounds, both recorded in `COMMENT_RESPONSES.md`. No square brackets remain in the draft.
+- The user's bracketed comments have been addressed in three rounds, all recorded in `COMMENT_RESPONSES.md`. No square brackets remain in the draft.
 - House style follows `~/Projects/shelterbelts2/WRITING_STYLE.md`: sentences under 25 words, no em-dashes, no semicolons, no Oxford commas, passive Methods, Australian spelling.
 
 ## Figures
 
-Numbering in the draft: 1 pipeline, 2 study area, 3 national map, 4 confusion matrices, 5 ABS validation, 6 cereal yield, 7 national multi-year. The gate trade-off figure is dropped. The files in `output/figures/` still carry the old numbers and most need regenerating from the final map (`COMMENT_RESPONSES.md`, Figures).
+Numbering in the draft: 1 pipeline, 2 study area, 3 national map, 4 confusion matrices, 5 ABS validation, 6 yield (cereal and legume), 7 national multi-year. The gate trade-off figure is dropped. The files in `output/figures/` still carry the old numbers and most need regenerating from the final map (`COMMENT_RESPONSES.md`, Figures).
 
 ## Before submission
 
